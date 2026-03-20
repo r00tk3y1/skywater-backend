@@ -1021,7 +1021,7 @@ def generate_testimonials():
             ))
     
     random.shuffle(testimonials)
-    return testimonial
+    return testimonials
 
 # ============== APPOINTMENTS SYSTEM ==============
 
