@@ -629,87 +629,98 @@ class Testimonial(BaseModel):
 
 PRODUCTS = [
     Product(
-        id="level-0",
-        level=0,
-        name="Ligero Rocío de Sky Water",
-        icon="cloud-rain",
-        price=99,
-        indication="Prueba de Efectividad Energética",
-        examples="Dolor leve de cabeza, molestia muscular pasajera, incomodidad articular menor, tensión cervical leve",
-        description="¿Eres nuevo o escéptico? Este nivel está diseñado para ti. Una micro-dosis de energía sanadora que te permitirá experimentar y comprobar por ti mismo el poder de Sky Water. Carga energética inicial calibrada para demostrar efectividad tangible en molestias menores. Perfecto para dar el primer paso.",
-        badge="Para Nuevos y Escépticos"
-    ),
-    Product(
         id="level-1",
         level=1,
-        name="Una Gota de Sky Water",
-        icon="droplet",
-        price=500,
-        indication="Sanación para Creyentes",
-        examples="Dolor leve persistente, malestar menor recurrente, tensión ligera acumulada",
-        description="Ya experimentaste el poder de Sky Water y CREES. Este nivel activa una carga energética significativamente mayor que el Nivel 0. Diseñado para quienes confían plenamente en el proceso y están listos para recibir una sanación más profunda. La fe amplifica la conexión energética.",
-        badge="Carga Energética Potenciada"
+        name="Revisión Pre-Tratamiento",
+        icon="stethoscope",
+        price=4.99,
+        indication="Análisis Energético Diagnóstico",
+        examples="Evaluación completa de tu estado energético, identificación de bloqueos, análisis de condiciones de salud",
+        description="Estudio completo de tus condiciones de salud donde identificamos la condición más importante que debes atender, incluyendo el origen del problema. Recibirás un diagnóstico energético personalizado que guiará tu proceso de sanación.",
+        badge="Primer Paso Esencial"
     ),
     Product(
         id="level-2",
         level=2,
-        name="Un Shot de Sky Water",
-        icon="glass-water",
-        price=1850,
-        indication="Curación simple",
-        examples="Dolor fuerte, malestar agudo, incomodidad intensa",
-        description="Para dolores más intensos que necesitan una dosis concentrada de sanación"
+        name="Ligero Rocío de Sky Water",
+        icon="cloud-rain",
+        price=19.99,
+        indication="Prueba de Efectividad Energética",
+        examples="Dolor leve de cabeza, molestia muscular pasajera, incomodidad articular menor, tensión cervical leve",
+        description="¿Eres nuevo o escéptico? Este nivel está diseñado para ti. Una micro-dosis de energía sanadora que te permitirá experimentar y comprobar por ti mismo el poder de Sky Water. Carga energética inicial calibrada para demostrar efectividad tangible en molestias menores.",
+        badge="Para Nuevos y Escépticos"
     ),
     Product(
         id="level-3",
         level=3,
-        name="Una Copa de Sky Water",
-        icon="wine-glass",
-        price=7500,
-        indication="Padecimiento crónico no grave",
-        examples="Dolor persistente, molestias recurrentes, padecimientos de larga duración",
-        description="Perfecto para condiciones que llevan tiempo contigo y necesitan atención profunda",
-        badge="Más Popular"
+        name="Una Gota de Sky Water",
+        icon="droplet",
+        price=49.99,
+        indication="Sanación para Creyentes",
+        examples="Dolor leve persistente, malestar menor recurrente, tensión ligera acumulada",
+        description="Ya experimentaste el poder de Sky Water y CREES. Este nivel activa una carga energética significativamente mayor. Diseñado para quienes confían plenamente en el proceso y están listos para recibir una sanación más profunda.",
+        badge="Carga Energética Potenciada"
     ),
     Product(
         id="level-4",
         level=4,
-        name="500ml de Sky Water",
-        icon="bottle-water",
-        price=14500,
-        indication="Padecimiento agudo moderado",
-        examples="Virus respiratorios agresivos, infecciones, condiciones agudas moderadas",
-        description="Sanación potente para condiciones agudas que afectan tu bienestar actual"
+        name="Un Shot de Sky Water",
+        icon="glass-water",
+        price=97,
+        indication="Curación simple",
+        examples="Dolor fuerte, malestar agudo, incomodidad intensa",
+        description="Para dolores más intensos que necesitan una dosis concentrada de sanación. Sesión completa de 60 minutos."
     ),
     Product(
         id="level-5",
         level=5,
-        name="1000ml de Sky Water",
-        icon="bottle-droplet",
-        price=25000,
-        indication="Padecimiento moderado crónico",
-        examples="Cefaleas constantes, migrañas recurrentes, dolores crónicos moderados",
-        description="Para condiciones crónicas que requieren una intervención energética sustancial"
+        name="Una Copa de Sky Water",
+        icon="wine-glass",
+        price=197,
+        indication="Padecimiento crónico no grave",
+        examples="Dolor persistente, molestias recurrentes, padecimientos de larga duración",
+        description="Paquete de 3 sesiones perfecto para condiciones que llevan tiempo contigo y necesitan atención profunda",
+        badge="Más Popular"
     ),
     Product(
         id="level-6",
         level=6,
-        name="2000ml de Sky Water",
-        icon="jug",
-        price=48500,
-        indication="Padecimiento grave crónico",
-        examples="Dolores de espalda por desplazamiento vertebral, hernias discales, padecimientos graves de larga data",
-        description="Sanación profunda para condiciones graves y complejas que afectan significativamente tu calidad de vida"
+        name="500ml de Sky Water",
+        icon="bottle-water",
+        price=397,
+        indication="Padecimiento agudo moderado",
+        examples="Virus respiratorios agresivos, infecciones, condiciones agudas moderadas",
+        description="Paquete de 6 sesiones. Sanación potente para condiciones agudas que afectan tu bienestar actual"
     ),
     Product(
         id="level-7",
         level=7,
+        name="1 Litro de Sky Water",
+        icon="bottle-droplet",
+        price=697,
+        indication="Padecimiento moderado crónico",
+        examples="Cefaleas constantes, migrañas recurrentes, dolores crónicos moderados",
+        description="Programa trimestral de 12 sesiones para condiciones crónicas que requieren intervención energética sustancial"
+    ),
+    Product(
+        id="level-8",
+        level=8,
+        name="2 Litros de Sky Water",
+        icon="jug",
+        price=997,
+        indication="Padecimiento grave crónico",
+        examples="Dolores de espalda por desplazamiento vertebral, hernias discales, padecimientos graves de larga data",
+        description="Programa semestral de 24 sesiones. Sanación profunda para condiciones graves y complejas"
+    ),
+    Product(
+        id="level-9",
+        level=9,
         name="Una Fuente de Sky Water",
         icon="fountain",
-        price=250000,
+        price=1997,
         indication="Curación de múltiples padecimientos simultáneos",
         examples="Combinación de varios padecimientos (leves, moderados, graves, agudos, crónicos)",
-        description="La experiencia completa de Sky Water. Sanación integral para múltiples condiciones de manera simultánea",
+        description="Programa anual con sesiones ilimitadas. La experiencia completa de Sky Water. Sanación integral para múltiples condiciones de manera simultánea",
         badge="Transformación Total"
     ),
 ]
