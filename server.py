@@ -635,8 +635,8 @@ PRODUCTS = [
         icon="stethoscope",
         price=4.99,
         indication="Análisis Energético Diagnóstico",
-        examples="Evaluación completa de tu estado energético, identificación de bloqueos, análisis de condiciones de salud",
-        description="Estudio completo de tus condiciones de salud donde identificamos la condición más importante que debes atender, incluyendo el origen del problema. Recibirás un diagnóstico energético personalizado que guiará tu proceso de sanación.",
+        examples="Evaluación completa de tu campo energético, identificación de bloqueos, detección del origen de malestares",
+        description="Tu primer paso hacia la sanación. Realizamos un estudio profundo de tus condiciones de salud para identificar la raíz de tus problemas. Recibirás un diagnóstico energético personalizado que revelará cuál es la condición más urgente a tratar y el origen real del problema. Este análisis es fundamental para diseñar tu camino de sanación.",
         badge="Primer Paso Esencial"
     ),
     Product(
@@ -646,8 +646,8 @@ PRODUCTS = [
         icon="cloud-rain",
         price=19.99,
         indication="Prueba de Efectividad Energética",
-        examples="Dolor leve de cabeza, molestia muscular pasajera, incomodidad articular menor, tensión cervical leve",
-        description="¿Eres nuevo o escéptico? Este nivel está diseñado para ti. Una micro-dosis de energía sanadora que te permitirá experimentar y comprobar por ti mismo el poder de Sky Water. Carga energética inicial calibrada para demostrar efectividad tangible en molestias menores.",
+        examples="Dolor leve de cabeza, molestia muscular pasajera, incomodidad articular menor, tensión cervical leve, estrés acumulado",
+        description="¿Eres escéptico o es tu primera vez? Este nivel es perfecto para ti. Una micro-dosis de energía sanadora diseñada para que experimentes y compruebes por ti mismo el poder de Sky Water. Ideal para molestias menores del día a día. Sin compromiso, máximo resultado.",
         badge="Para Nuevos y Escépticos"
     ),
     Product(
@@ -657,8 +657,8 @@ PRODUCTS = [
         icon="droplet",
         price=49.99,
         indication="Sanación para Creyentes",
-        examples="Dolor leve persistente, malestar menor recurrente, tensión ligera acumulada",
-        description="Ya experimentaste el poder de Sky Water y CREES. Este nivel activa una carga energética significativamente mayor. Diseñado para quienes confían plenamente en el proceso y están listos para recibir una sanación más profunda.",
+        examples="Dolor leve persistente, malestar menor recurrente, tensión ligera acumulada, fatiga energética, bloqueos emocionales leves",
+        description="Ya probaste Sky Water y CREES en su poder. Este nivel desbloquea una carga energética significativamente mayor. La fe amplifica la conexión cuántica, permitiendo una sanación más profunda y duradera. Para quienes están listos para el siguiente paso en su transformación.",
         badge="Carga Energética Potenciada"
     ),
     Product(
@@ -667,9 +667,10 @@ PRODUCTS = [
         name="Un Shot de Sky Water",
         icon="glass-water",
         price=97,
-        indication="Curación simple",
-        examples="Dolor fuerte, malestar agudo, incomodidad intensa",
-        description="Para dolores más intensos que necesitan una dosis concentrada de sanación. Sesión completa de 60 minutos."
+        indication="Curación de Dolencias Agudas",
+        examples="Dolor fuerte de muelas, malestar agudo de espalda, migraña intensa, dolor muscular severo, incomodidad articular aguda",
+        description="Una dosis concentrada de sanación para dolores intensos que necesitan atención inmediata. Sesión completa de 60 minutos donde canalizamos energía de alta frecuencia directamente a la zona afectada. Alivio rápido y efectivo para cuando el dolor no puede esperar.",
+        badge="Alivio Rápido"
     ),
     Product(
         id="level-5",
@@ -677,9 +678,9 @@ PRODUCTS = [
         name="Una Copa de Sky Water",
         icon="wine-glass",
         price=197,
-        indication="Padecimiento crónico no grave",
-        examples="Dolor persistente, molestias recurrentes, padecimientos de larga duración",
-        description="Paquete de 3 sesiones perfecto para condiciones que llevan tiempo contigo y necesitan atención profunda",
+        indication="Padecimiento Crónico No Grave",
+        examples="Migrañas recurrentes, artritis leve, dolor de espalda crónico, tensión muscular constante, problemas digestivos persistentes",
+        description="Paquete de 3 sesiones diseñado para condiciones que llevan tiempo contigo. La sanación profunda requiere constancia. Con este programa, trabajamos en capas sucesivas para liberar bloqueos energéticos arraigados y restaurar el flujo natural de tu bioenergía.",
         badge="Más Popular"
     ),
     Product(
@@ -688,9 +689,10 @@ PRODUCTS = [
         name="500ml de Sky Water",
         icon="bottle-water",
         price=397,
-        indication="Padecimiento agudo moderado",
-        examples="Virus respiratorios agresivos, infecciones, condiciones agudas moderadas",
-        description="Paquete de 6 sesiones. Sanación potente para condiciones agudas que afectan tu bienestar actual"
+        indication="Padecimiento Agudo Moderado",
+        examples="Virus respiratorios agresivos, infecciones recurrentes, recuperación post-operatoria, lesiones deportivas, fatiga crónica severa",
+        description="Programa de 6 sesiones para condiciones agudas que requieren intervención sostenida. Ideal para enfermedades que afectan tu rendimiento diario. Reforzamos tu sistema inmunológico energético y aceleramos los procesos naturales de recuperación de tu cuerpo.",
+        badge="Recuperación Acelerada"
     ),
     Product(
         id="level-7",
@@ -698,9 +700,10 @@ PRODUCTS = [
         name="1 Litro de Sky Water",
         icon="bottle-droplet",
         price=697,
-        indication="Padecimiento moderado crónico",
-        examples="Cefaleas constantes, migrañas recurrentes, dolores crónicos moderados",
-        description="Programa trimestral de 12 sesiones para condiciones crónicas que requieren intervención energética sustancial"
+        indication="Padecimiento Moderado Crónico",
+        examples="Cefaleas constantes desde hace años, migrañas incapacitantes, fibromialgia, dolores crónicos de década, trastornos del sueño severos",
+        description="Programa trimestral de 12 sesiones para condiciones crónicas establecidas. Cuando el problema tiene raíces profundas, necesitamos tiempo para sanar completamente. Este programa incluye seguimiento personalizado y ajustes de tratamiento según tu evolución.",
+        badge="Sanación Profunda"
     ),
     Product(
         id="level-8",
@@ -708,9 +711,10 @@ PRODUCTS = [
         name="2 Litros de Sky Water",
         icon="jug",
         price=997,
-        indication="Padecimiento grave crónico",
-        examples="Dolores de espalda por desplazamiento vertebral, hernias discales, padecimientos graves de larga data",
-        description="Programa semestral de 24 sesiones. Sanación profunda para condiciones graves y complejas"
+        indication="Padecimiento Grave Crónico",
+        examples="Hernias discales, desplazamiento vertebral, dolor de espalda incapacitante, enfermedades autoinmunes, condiciones degenerativas",
+        description="Programa semestral de 24 sesiones para las condiciones más complejas y graves. Sanación intensiva para padecimientos que han resistido otros tratamientos. Trabajamos a nivel celular y energético para restaurar el equilibrio perdido y devolverte tu calidad de vida.",
+        badge="Tratamiento Intensivo"
     ),
     Product(
         id="level-9",
@@ -718,9 +722,9 @@ PRODUCTS = [
         name="Una Fuente de Sky Water",
         icon="fountain",
         price=1997,
-        indication="Curación de múltiples padecimientos simultáneos",
-        examples="Combinación de varios padecimientos (leves, moderados, graves, agudos, crónicos)",
-        description="Programa anual con sesiones ilimitadas. La experiencia completa de Sky Water. Sanación integral para múltiples condiciones de manera simultánea",
+        indication="Sanación Integral Múltiple",
+        examples="Diabetes + hipertensión + dolor crónico, múltiples condiciones simultáneas, transformación total de salud, renovación energética completa",
+        description="Programa anual con sesiones ilimitadas. La experiencia definitiva de Sky Water. Para quienes enfrentan múltiples condiciones o buscan una transformación total de su salud. Acceso prioritario, atención personalizada 24/7, y un compromiso completo con tu bienestar. Tu inversión más importante: tu salud.",
         badge="Transformación Total"
     ),
 ]
