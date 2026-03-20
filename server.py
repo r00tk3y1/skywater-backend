@@ -978,27 +978,33 @@ def generate_testimonials():
     ]
     
     level_names = {
-        0: "Ligero Rocío de Sky Water",
-        1: "Una Gota de Sky Water", 2: "Un Shot de Sky Water", 3: "Una Copa de Sky Water",
-        4: "500ml de Sky Water", 5: "1000ml de Sky Water", 6: "2000ml de Sky Water",
-        7: "Una Fuente de Sky Water"
+        1: "Revisión Pre-Tratamiento",
+        2: "Ligero Rocío de Sky Water",
+        3: "Una Gota de Sky Water", 
+        4: "Un Shot de Sky Water", 
+        5: "Una Copa de Sky Water",
+        6: "500ml de Sky Water", 
+        7: "1 Litro de Sky Water", 
+        8: "2 Litros de Sky Water",
+        9: "Una Fuente de Sky Water"
     }
     
     testimonial_texts = {
-        0: ["Tenía una molestia leve en el cuello por dormir mal. En unas horas se fue completamente.", "Un dolor de cabeza menor que no me dejaba concentrar. Desapareció al poco tiempo.", "Probé Sky Water por primera vez con una incomodidad muscular. Me convenció al instante."],
-        1: ["Tenía un dolor de cabeza leve. Después de Sky Water, desapareció en horas. Increíble.", "Molestia menor en el hombro. Al día siguiente ya no sentía nada."],
-        2: ["Dolor de muelas insoportable y a las 3 horas ya no sentía nada. Impresionante.", "Un dolor de espalda agudo. Sky Water lo resolvió en un día."],
-        3: ["Llevaba 5 AÑOS con migrañas. Sky Water me devolvió mi vida.", "Mi artritis en las manos me impedía trabajar. Ahora puedo escribir sin dolor."],
-        4: ["Un virus respiratorio me tenía muy mal. Sky Water me ayudó a recuperarme.", "Infección persistente que no cedía. Con Sky Water mejoré."],
-        5: ["Migrañas que me incapacitaban 3 veces por semana. Ahora vivo normalmente.", "Dolores crónicos de una década. Por fin encontré alivio."],
-        6: ["Hernia discal L4-L5. Sky Water me salvó de la cirugía.", "Dolor de espalda por desplazamiento vertebral. Ahora vivo sin dolor."],
-        7: ["Diabetes, hipertensión y dolor crónico. La mejora fue integral.", "Múltiples condiciones. Sky Water trabajó en todas simultáneamente."]
+        1: ["La revisión me ayudó a entender exactamente qué necesitaba sanar. Muy revelador.", "El diagnóstico energético fue preciso. Ahora sé por dónde empezar mi sanación.", "Por solo $4.99 obtuve claridad sobre mi condición. Excelente primer paso."],
+        2: ["Tenía una molestia leve en el cuello por dormir mal. En unas horas se fue completamente.", "Un dolor de cabeza menor que no me dejaba concentrar. Desapareció al poco tiempo.", "Probé Sky Water por primera vez con una incomodidad muscular. Me convenció al instante."],
+        3: ["Tenía un dolor de cabeza leve. Después de Sky Water, desapareció en horas. Increíble.", "Molestia menor en el hombro. Al día siguiente ya no sentía nada."],
+        4: ["Dolor de muelas insoportable y a las 3 horas ya no sentía nada. Impresionante.", "Un dolor de espalda agudo. Sky Water lo resolvió en un día."],
+        5: ["Llevaba 5 AÑOS con migrañas. Sky Water me devolvió mi vida.", "Mi artritis en las manos me impedía trabajar. Ahora puedo escribir sin dolor."],
+        6: ["Un virus respiratorio me tenía muy mal. Sky Water me ayudó a recuperarme.", "Infección persistente que no cedía. Con Sky Water mejoré."],
+        7: ["Migrañas que me incapacitaban 3 veces por semana. Ahora vivo normalmente.", "Dolores crónicos de una década. Por fin encontré alivio."],
+        8: ["Hernia discal L4-L5. Sky Water me salvó de la cirugía.", "Dolor de espalda por desplazamiento vertebral. Ahora vivo sin dolor."],
+        9: ["Diabetes, hipertensión y dolor crónico. La mejora fue integral.", "Múltiples condiciones. Sky Water trabajó en todas simultáneamente."]
     }
     
     months = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
     
     testimonials = []
-    level_counts = {0: 45, 1: 74, 2: 98, 3: 123, 4: 88, 5: 59, 6: 39, 7: 9}
+    level_counts = {1: 120, 2: 95, 3: 74, 4: 98, 5: 123, 6: 88, 7: 59, 8: 39, 9: 9}
     
     for level, count in level_counts.items():
         texts = testimonial_texts[level]
@@ -1015,7 +1021,7 @@ def generate_testimonials():
             ))
     
     random.shuffle(testimonials)
-    return testimonials
+    return testimonial
 
 # ============== APPOINTMENTS SYSTEM ==============
 
