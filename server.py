@@ -1462,7 +1462,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:8001",
         "https://sacred-wavelength.preview.emergentagent.com",
-        "https://*.vercel.app",
+        "https://skywater-five.vercel.app",
         "https://*.expo.dev",
     ],
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
