@@ -1452,6 +1452,74 @@ async def get_guarantee_info():
         "note": "Nuestro compromiso es tu bienestar. Si no experimentas mejoras, queremos saberlo."
     }
 
+# ── Landing page para anuncios Meta Ads ─────────────────────────────────────
+@app.get("/download", response_class=HTMLResponse)
+async def download_page():
+    return HTMLResponse(content="""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Sky Water — Descargar App</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(160deg, #0d1f3c 0%, #1a3a6e 60%, #0d1f3c 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+  .card {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 24px;
+    padding: 40px 28px 36px;
+    max-width: 380px;
+    width: 100%;
+    text-align: center;
+    backdrop-filter: blur(12px);
+  }
+  .logo { font-size: 13px; letter-spacing: 4px; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 6px; }
+  h1 { font-size: 34px; font-weight: 700; color: #ffffff; margin-bottom: 8px; letter-spacing: -0.5px; }
+  .tagline { font-size: 15px; color: rgba(255,255,255,0.6); margin-bottom: 36px; line-height: 1.5; }
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    width: 100%; padding: 17px 20px; border-radius: 14px;
+    font-size: 16px; font-weight: 600; text-decoration: none; margin-bottom: 12px;
+    transition: transform 0.15s ease, opacity 0.15s ease; color: #ffffff;
+  }
+  .btn:active { transform: scale(0.97); opacity: 0.85; }
+  .btn-ios { background: #000000; border: 1px solid rgba(255,255,255,0.15); }
+  .btn-android { background: #1a73e8; }
+  .btn-web { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); }
+  .divider { color: rgba(255,255,255,0.2); font-size: 12px; margin: 8px 0 20px; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Sky Water</div>
+  <h1>Descarga la app</h1>
+  <p class="tagline">Sanación energética a distancia.<br>Empieza hoy.</p>
+  <a class="btn btn-ios" href="https://apps.apple.com/us/app/sky-water/id6760956520">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+    App Store — iPhone
+  </a>
+  <a class="btn btn-android" href="https://play.google.com/store/apps/details?id=com.skywater.app">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><path d="M3.18 23.76c.37.21.8.24 1.2.09l11.6-6.7-2.53-2.53L3.18 23.76zm16.3-10.34L17 11.97l-2.7 2.7 2.68 2.68 2.51-1.45c.71-.41.71-1.48-.01-1.88zM1.34.62C1.13.85 1 1.2 1 1.63v20.74c0 .43.13.78.35 1.01l.06.05 11.62-11.62v-.27L1.34.62zm14.48 8.35L4.22.21C3.82.06 3.39.1 3.03.3L13.6 10.88l2.22-1.91z"/></svg>
+    Google Play — Android
+  </a>
+  <div class="divider">— o también —</div>
+  <a class="btn btn-web" href="https://skywater.site">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="rgba(255,255,255,0.8)"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+    Ver sitio web
+  </a>
+</div>
+</body>
+</html>""", status_code=200)
+
 # Include the router (MUST be after all route definitions)
 app.include_router(api_router)
 
