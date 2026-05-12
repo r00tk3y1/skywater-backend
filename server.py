@@ -1,23 +1,49 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import hashlib
+import time
+import json
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 import random
 import mercadopago
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import httpx
+
+# Google Calendar integration (optional — graceful degradation if not installed)
+try:
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+    GOOGLE_CALENDAR_AVAILABLE = True
+except ImportError:
+    GOOGLE_CALENDAR_AVAILABLE = False
+    logging.warning("google-api-python-client not installed — Google Calendar integration disabled")
+
+# Try to import emergentintegrations, but make it optional
+try:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    EMERGENT_AVAILABLE = True
+except ImportError:
+    EMERGENT_AVAILABLE = False
+    logging.warning("emergentintegrations not available, using direct OpenAI API")
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# LLM Configuration
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -32,6 +58,23 @@ MERCADO_PAGO_PUBLIC_KEY = os.environ.get('MERCADO_PAGO_PUBLIC_KEY', '')
 mp_sdk = None
 if MERCADO_PAGO_ACCESS_TOKEN:
     mp_sdk = mercadopago.SDK(MERCADO_PAGO_ACCESS_TOKEN)
+
+# Google Calendar configuration (stored OAuth2 refresh token — one-time setup)
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
+GOOGLE_REFRESH_TOKEN = os.environ.get('GOOGLE_REFRESH_TOKEN', '')
+GOOGLE_CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_ID', 'primary')
+
+# Telegram instant notifications
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+ADMIN_PIN = os.environ.get('ADMIN_PIN', '000000')
+
+# Meta Conversions API (CAPI)
+META_PIXEL_ID = os.environ.get('META_PIXEL_ID', '631454239092950')
+META_CAPI_TOKEN = os.environ.get('META_CAPI_TOKEN', '')
+META_AD_ACCOUNT = 'act_688124101642557'
+META_GRAPH_TOKEN = os.environ.get('META_GRAPH_TOKEN', 'EAAe1IMTlJOoBRV8qt2AtZBZCr3RfXLA8ngD4pKMbKvXjhxw6ie9eMIYOZAXdk7xv1yEanbeMHd1eF7CreUa9xwzL368MQxT7rdNUddjGuHzZAOlZAUx5HFgisBOsMQKuZBgs8Iv18xM381OnaViJQEawZBDvwgvtsJtXnEB2sYEsRZC2yTV59EWJBdLtoXFblwIv0zaFigZDZD'
 
 # Create the main app
 app = FastAPI(title="SKY WATER API")
@@ -585,6 +628,7 @@ class PatientData(BaseModel):
     birth_date: str
     symptoms: str
     email: str
+    rfc: Optional[str] = None
 
 class OrderCreate(BaseModel):
     product_id: str
@@ -625,13 +669,33 @@ class Testimonial(BaseModel):
     date: str
     verified: bool = True
 
+class TestimonialSubmit(BaseModel):
+    name: str
+    country: str
+    level: int
+    level_name: str
+    text: str
+    rating: int  # 1-5
+    email: str
+    order_id: str
+
+class PushTokenRegister(BaseModel):
+    email: str
+    token: str
+    platform: str = "unknown"  # "ios" | "android"
+
+class RedeemRewardRequest(BaseModel):
+    email: str
+    reward_index: int
+    order_id: str
+
 # ============== PRODUCTS DATA ==============
 
 PRODUCTS = [
     Product(
         id="level-1",
         level=1,
-        name="Revisión Pre-Tratamiento",
+        name="Sky Water - Primer Contacto",
         icon="stethoscope",
         price=4.99,
         indication="Análisis Energético Diagnóstico",
@@ -642,8 +706,8 @@ PRODUCTS = [
     Product(
         id="level-2",
         level=2,
-        name="Ligero Rocío de Sky Water",
-        icon="cloud-rain",
+        name="Sky Water - Pulso Inicial",
+        icon="zap",
         price=19.99,
         indication="Prueba de Efectividad Energética",
         examples="Dolor leve de cabeza, molestia muscular pasajera, incomodidad articular menor, tensión cervical leve, estrés acumulado",
@@ -653,8 +717,8 @@ PRODUCTS = [
     Product(
         id="level-3",
         level=3,
-        name="Una Gota de Sky Water",
-        icon="droplet",
+        name="Sky Water - Onda Suave",
+        icon="radio",
         price=49.99,
         indication="Sanación para Creyentes",
         examples="Dolor leve persistente, malestar menor recurrente, tensión ligera acumulada, fatiga energética, bloqueos emocionales leves",
@@ -664,8 +728,8 @@ PRODUCTS = [
     Product(
         id="level-4",
         level=4,
-        name="Un Shot de Sky Water",
-        icon="glass-water",
+        name="Sky Water - Corriente Activa",
+        icon="activity",
         price=97,
         indication="Curación de Dolencias Agudas",
         examples="Dolor fuerte de muelas, malestar agudo de espalda, migraña intensa, dolor muscular severo, incomodidad articular aguda",
@@ -675,8 +739,8 @@ PRODUCTS = [
     Product(
         id="level-5",
         level=5,
-        name="Una Copa de Sky Water",
-        icon="wine-glass",
+        name="Sky Water - Inmersión Profunda",
+        icon="layers",
         price=197,
         indication="Padecimiento Crónico No Grave",
         examples="Migrañas recurrentes, artritis leve, dolor de espalda crónico, tensión muscular constante, problemas digestivos persistentes",
@@ -686,8 +750,8 @@ PRODUCTS = [
     Product(
         id="level-6",
         level=6,
-        name="500ml de Sky Water",
-        icon="bottle-water",
+        name="Sky Water - Resonancia Avanzada",
+        icon="globe",
         price=397,
         indication="Padecimiento Agudo Moderado",
         examples="Virus respiratorios agresivos, infecciones recurrentes, recuperación post-operatoria, lesiones deportivas, fatiga crónica severa",
@@ -697,8 +761,8 @@ PRODUCTS = [
     Product(
         id="level-7",
         level=7,
-        name="1 Litro de Sky Water",
-        icon="bottle-droplet",
+        name="Sky Water - Onda Expandida",
+        icon="sun",
         price=697,
         indication="Padecimiento Moderado Crónico",
         examples="Cefaleas constantes desde hace años, migrañas incapacitantes, fibromialgia, dolores crónicos de década, trastornos del sueño severos",
@@ -708,8 +772,8 @@ PRODUCTS = [
     Product(
         id="level-8",
         level=8,
-        name="2 Litros de Sky Water",
-        icon="jug",
+        name="Sky Water - Sanación Máxima",
+        icon="maximize-2",
         price=997,
         indication="Padecimiento Grave Crónico",
         examples="Hernias discales, desplazamiento vertebral, dolor de espalda incapacitante, enfermedades autoinmunes, condiciones degenerativas",
@@ -719,8 +783,8 @@ PRODUCTS = [
     Product(
         id="level-9",
         level=9,
-        name="Una Fuente de Sky Water",
-        icon="fountain",
+        name="Sky Water - Transformación Total",
+        icon="infinity",
         price=1997,
         indication="Sanación Integral Múltiple",
         examples="Diabetes + hipertensión + dolor crónico, múltiples condiciones simultáneas, transformación total de salud, renovación energética completa",
@@ -842,15 +906,16 @@ async def create_mercadopago_preference(data: MercadoPagoPreference):
         "payer": {
             "email": order_obj.patient_data.email,
             "name": f"{order_obj.patient_data.first_name} {order_obj.patient_data.first_lastname}",
+            **({"identification": {"type": "RFC", "number": order_obj.patient_data.rfc}} if order_obj.patient_data.rfc else {}),
         },
         "external_reference": order_obj.id,
         "back_urls": {
-            "success": f"https://sacred-wavelength.preview.emergentagent.com/checkout/confirmation?order_id={order_obj.id}&status=approved",
-            "failure": f"https://sacred-wavelength.preview.emergentagent.com/checkout/payment?order_id={order_obj.id}&status=failure",
-            "pending": f"https://sacred-wavelength.preview.emergentagent.com/checkout/payment?order_id={order_obj.id}&status=pending"
+            "success": f"https://skywater.site/checkout/confirmation?order_id={order_obj.id}&status=approved",
+            "failure": f"https://skywater.site/checkout/payment?order_id={order_obj.id}&status=failure",
+            "pending": f"https://skywater.site/checkout/payment?order_id={order_obj.id}&status=pending"
         },
         "auto_return": "approved",
-        "notification_url": "https://sacred-wavelength.preview.emergentagent.com/api/mercadopago/webhook",
+        "notification_url": "https://skywater-backend-production-cc33.up.railway.app/api/mercadopago/webhook",
         "statement_descriptor": "SKY WATER",
     }
     
@@ -936,21 +1001,371 @@ async def get_payment_status(order_id: str):
         "paid_at": order.get("paid_at")
     }
 
+class ContributionRequest(BaseModel):
+    amount: float
+    description: str = "Sky Water Contribution"
+
+@api_router.post("/mercadopago/contribution")
+async def create_contribution(data: ContributionRequest):
+    """Create a Mercado Pago preference for voluntary contributions"""
+    if not mp_sdk:
+        raise HTTPException(status_code=400, detail="Mercado Pago not configured")
+    
+    try:
+        preference_data = {
+            "items": [{
+                "title": "Contribución a Sky Water",
+                "description": data.description,
+                "quantity": 1,
+                "currency_id": "USD",
+                "unit_price": float(data.amount)
+            }],
+            "back_urls": {
+                "success": "https://skywater-five.vercel.app/",
+                "failure": "https://skywater-five.vercel.app/",
+                "pending": "https://skywater-five.vercel.app/"
+            },
+            "auto_return": "approved",
+            "statement_descriptor": "SKYWATER CONTRIB"
+        }
+        
+        preference_response = mp_sdk.preference().create(preference_data)
+        
+        if preference_response["status"] == 201:
+            preference = preference_response["response"]
+            return {
+                "preference_id": preference["id"],
+                "init_point": preference["init_point"]
+            }
+        else:
+            raise HTTPException(status_code=400, detail="Error creating contribution preference")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating contribution: {str(e)}")
+
+# ============== SYMPTOM ANALYZER CHATBOT ==============
+
+class SymptomAnalysisRequest(BaseModel):
+    symptoms: str
+    language: str = "es"
+    session_id: Optional[str] = None
+
+class SymptomAnalysisResponse(BaseModel):
+    analysis: str
+    recommended_level: int
+    level_name: str
+    level_description: str
+    session_id: str
+
+LEVEL_INFO = {
+    "es": {
+        1: {"name": "Sky Water - Primer Contacto", "description": "Sesión diagnóstica de 30 min. Indicada para quienes desean una evaluación inicial sin síntomas activos o buscan orientación preventiva."},
+        2: {"name": "Sky Water - Pulso Inicial", "description": "Sesión de 30 min. Para fatiga leve ocasional, cefaleas esporádicas, estrés puntual o usuarios que se inician en la terapia energética."},
+        3: {"name": "Sky Water - Onda Suave", "description": "Sesión de 45 min. Para fatiga recurrente, cefaleas frecuentes, lumbalgia o cervicalgia persistente, insomnio moderado y ansiedad leve."},
+        4: {"name": "Sky Water - Corriente Activa", "description": "Sesión intensiva de 60 min. Para dolor agudo intenso, migraña recurrente, artralgia notable, trastorno de ansiedad, desequilibrio hormonal o patología digestiva funcional (gastritis, SII)."},
+        5: {"name": "Sky Water - Inmersión Profunda", "description": "Sesión profunda de 90 min. Para condiciones crónicas de meses o años: fibromialgia, síndrome de fatiga crónica, depresión clínica, endometriosis, disfunción tiroidea o dolor neuropático."},
+        6: {"name": "Sky Water - Resonancia Avanzada", "description": "Sesión avanzada de 2 horas. Para múltiples patologías simultáneas, enfermedad autoinmune establecida, neuropatía periférica, TEPT con somatización o trastornos hormonales complejos."},
+        7: {"name": "Sky Water - Onda Expandida", "description": "Sesión premium de 2.5 horas. Para recuperación post-quirúrgica, COVID prolongado, disautonomía, insuficiencia suprarrenal severa o afectación multiorgánica."},
+        8: {"name": "Sky Water - Sanación Máxima", "description": "Sesión máxima de 3 horas. Para enfermedades degenerativas, sintomatología neurológica grave, recuperación post-quimioterapia o patología psiquiátrica severa con componente somático."},
+        9: {"name": "Sky Water - Transformación Total", "description": "Sesiones extendidas hasta mejoría sostenida. Para cuadros críticos, enfermedades terminales o crónicas multi-sistémicas de alta complejidad que requieren intervención continua."}
+    },
+    "en": {
+        1: {"name": "Sky Water - First Contact", "description": "30-min diagnostic session. Indicated for those seeking an initial assessment without active symptoms or looking for preventive guidance."},
+        2: {"name": "Sky Water - Initial Pulse", "description": "30-min session. For occasional mild fatigue, sporadic headaches, situational stress, or first-time users exploring energy therapy."},
+        3: {"name": "Sky Water - Gentle Wave", "description": "45-min session. For recurring fatigue, frequent headaches, persistent back or neck pain, moderate insomnia, and mild anxiety disorder."},
+        4: {"name": "Sky Water - Active Current", "description": "Intensive 60-min session. For intense acute pain, recurrent migraines, notable joint pain, anxiety disorder, hormonal imbalance, or functional digestive pathology (gastritis, IBS)."},
+        5: {"name": "Sky Water - Deep Immersion", "description": "Deep 90-min session. For chronic conditions lasting months or years: fibromyalgia, chronic fatigue syndrome, clinical depression, endometriosis, thyroid dysfunction, or neuropathic pain."},
+        6: {"name": "Sky Water - Advanced Resonance", "description": "Advanced 2-hour session. For multiple simultaneous pathologies, established autoimmune disease, peripheral neuropathy, PTSD with somatic manifestation, or complex hormonal disorders."},
+        7: {"name": "Sky Water - Expanded Wave", "description": "Premium 2.5-hour session. For post-surgical recovery, long COVID, dysautonomia, severe adrenal insufficiency, or multi-organ involvement."},
+        8: {"name": "Sky Water - Maximum Healing", "description": "Maximum 3-hour session. For degenerative diseases, severe neurological symptoms, post-chemotherapy recovery, or severe psychiatric pathology with somatic component."},
+        9: {"name": "Sky Water - Total Transformation", "description": "Extended sessions until sustained improvement. For critical, terminal, or high-complexity multi-systemic chronic conditions requiring continuous intervention."}
+    },
+    "de": {
+        1: {"name": "Sky Water - Erstkontakt", "description": "30-min Diagnosesitzung. Für Personen ohne aktive Symptome, die eine erste Bewertung oder präventive Orientierung suchen."},
+        2: {"name": "Sky Water - Erster Impuls", "description": "30-min Sitzung. Für gelegentliche leichte Müdigkeit, sporadische Kopfschmerzen, situativen Stress oder Erstnutzer."},
+        3: {"name": "Sky Water - Sanfte Welle", "description": "45-min Sitzung. Für wiederkehrende Müdigkeit, häufige Kopfschmerzen, anhaltende Rücken- oder Nackenschmerzen, moderaten Schlafmangel und leichte Angststörung."},
+        4: {"name": "Sky Water - Aktiver Strom", "description": "Intensive 60-min Sitzung. Für starke akute Schmerzen, wiederkehrende Migräne, deutliche Gelenkschmerzen, Angststörungen, hormonelles Ungleichgewicht oder funktionelle Verdauungspathologie."},
+        5: {"name": "Sky Water - Tiefe Immersion", "description": "Tiefe 90-min Sitzung. Für chronische Erkrankungen seit Monaten oder Jahren: Fibromyalgie, chronisches Müdigkeitssyndrom, klinische Depression, Endometriose, Schilddrüsenfunktionsstörung."},
+        6: {"name": "Sky Water - Fortgeschrittene Resonanz", "description": "Fortgeschrittene 2-Stunden-Sitzung. Für mehrere gleichzeitige Pathologien, etablierte Autoimmunerkrankung, periphere Neuropathie, PTBS mit Somatisierung."},
+        7: {"name": "Sky Water - Erweiterte Welle", "description": "Premium 2,5-Stunden-Sitzung. Für postoperative Erholung, Long COVID, Dysautonomie, schwere Nebenniereninsuffizienz oder Multiorganbefall."},
+        8: {"name": "Sky Water - Maximale Heilung", "description": "Maximale 3-Stunden-Sitzung. Für degenerative Erkrankungen, schwere neurologische Symptome, Erholung nach Chemotherapie oder schwere psychiatrische Pathologie."},
+        9: {"name": "Sky Water - Totale Transformation", "description": "Erweiterte Sitzungen bis zur nachhaltigen Verbesserung. Für kritische, terminale oder hochkomplexe multi-systemische chronische Erkrankungen."}
+    },
+    "it": {
+        1: {"name": "Sky Water - Primo Contatto", "description": "Sessione diagnostica di 30 min. Indicata per chi cerca una valutazione iniziale senza sintomi attivi o orientamento preventivo."},
+        2: {"name": "Sky Water - Impulso Iniziale", "description": "Sessione di 30 min. Per affaticamento lieve occasionale, cefalee sporadiche, stress situazionale o utenti alle prime armi."},
+        3: {"name": "Sky Water - Onda Gentile", "description": "Sessione di 45 min. Per affaticamento ricorrente, cefalee frequenti, lombalgia o cervicalgia persistente, insonnia moderata e disturbo d'ansia lieve."},
+        4: {"name": "Sky Water - Corrente Attiva", "description": "Sessione intensiva di 60 min. Per dolore acuto intenso, emicrania ricorrente, artralgia significativa, disturbo d'ansia, squilibrio ormonale o patologia digestiva funzionale."},
+        5: {"name": "Sky Water - Immersione Profonda", "description": "Sessione profonda di 90 min. Per condizioni croniche da mesi o anni: fibromialgia, sindrome da fatica cronica, depressione clinica, endometriosi, disfunzione tiroidea."},
+        6: {"name": "Sky Water - Risonanza Avanzata", "description": "Sessione avanzata di 2 ore. Per più patologie simultanee, malattia autoimmune stabilita, neuropatia periferica, PTSD con somatizzazione o disturbi ormonali complessi."},
+        7: {"name": "Sky Water - Onda Espansa", "description": "Sessione premium di 2,5 ore. Per recupero post-chirurgico, long COVID, disautonomia, insufficienza surrenalica severa o coinvolgimento multi-organo."},
+        8: {"name": "Sky Water - Guarigione Massima", "description": "Sessione massima di 3 ore. Per malattie degenerative, sintomi neurologici gravi, recupero post-chemioterapia o patologia psichiatrica severa con componente somatica."},
+        9: {"name": "Sky Water - Trasformazione Totale", "description": "Sessioni prolungate fino al miglioramento sostenuto. Per quadri critici, terminali o cronici multi-sistemici ad alta complessità che richiedono intervento continuo."}
+    },
+    "pt": {
+        1: {"name": "Sky Water - Primeiro Contato", "description": "Sessão diagnóstica de 30 min. Indicada para quem busca uma avaliação inicial sem sintomas ativos ou orientação preventiva."},
+        2: {"name": "Sky Water - Pulso Inicial", "description": "Sessão de 30 min. Para fadiga leve ocasional, cefaleias esporádicas, estresse pontual ou usuários iniciantes na terapia energética."},
+        3: {"name": "Sky Water - Onda Suave", "description": "Sessão de 45 min. Para fadiga recorrente, cefaleias frequentes, lombalgia ou cervicalgia persistente, insônia moderada e ansiedade leve."},
+        4: {"name": "Sky Water - Corrente Ativa", "description": "Sessão intensiva de 60 min. Para dor aguda intensa, enxaqueca recorrente, artralgia notável, transtorno de ansiedade, desequilíbrio hormonal ou patologia digestiva funcional (gastrite, SII)."},
+        5: {"name": "Sky Water - Imersão Profunda", "description": "Sessão profunda de 90 min. Para condições crônicas de meses ou anos: fibromialgia, síndrome de fadiga crônica, depressão clínica, endometriose, disfunção tireoidiana ou dor neuropática."},
+        6: {"name": "Sky Water - Ressonância Avançada", "description": "Sessão avançada de 2 horas. Para múltiplas patologias simultâneas, doença autoimune estabelecida, neuropatia periférica, TEPT com somatização ou distúrbios hormonais complexos."},
+        7: {"name": "Sky Water - Onda Expandida", "description": "Sessão premium de 2,5 horas. Para recuperação pós-cirúrgica, COVID longa, disautonomia, insuficiência adrenal severa ou acometimento multiorgânico."},
+        8: {"name": "Sky Water - Cura Máxima", "description": "Sessão máxima de 3 horas. Para doenças degenerativas, sintomatologia neurológica grave, recuperação pós-quimioterapia ou patologia psiquiátrica severa com componente somático."},
+        9: {"name": "Sky Water - Transformação Total", "description": "Sessões estendidas até melhora sustentada. Para quadros críticos, terminais ou crônicos multi-sistêmicos de alta complexidade que requerem intervenção contínua."}
+    },
+    "fr": {
+        1: {"name": "Sky Water - Premier Contact", "description": "Séance diagnostique de 30 min. Indiquée pour les personnes cherchant une évaluation initiale sans symptômes actifs ou une orientation préventive."},
+        2: {"name": "Sky Water - Impulsion Initiale", "description": "Séance de 30 min. Pour fatigue légère occasionnelle, céphalées sporadiques, stress situationnel ou premiers utilisateurs."},
+        3: {"name": "Sky Water - Onde Douce", "description": "Séance de 45 min. Pour fatigue récurrente, céphalées fréquentes, lombalgie ou cervicalgie persistante, insomnie modérée et trouble anxieux léger."},
+        4: {"name": "Sky Water - Courant Actif", "description": "Séance intensive de 60 min. Pour douleur aiguë intense, migraine récurrente, arthralgie notable, trouble anxieux, déséquilibre hormonal ou pathologie digestive fonctionnelle (gastrite, SCI)."},
+        5: {"name": "Sky Water - Immersion Profonde", "description": "Séance profonde de 90 min. Pour conditions chroniques depuis des mois ou années : fibromyalgie, syndrome de fatigue chronique, dépression clinique, endométriose, dysfonction thyroïdienne."},
+        6: {"name": "Sky Water - Résonance Avancée", "description": "Séance avancée de 2 heures. Pour plusieurs pathologies simultanées, maladie auto-immune établie, neuropathie périphérique, TSPT avec somatisation ou troubles hormonaux complexes."},
+        7: {"name": "Sky Water - Onde Étendue", "description": "Séance premium de 2,5 heures. Pour récupération post-chirurgicale, COVID long, dysautonomie, insuffisance surrénalienne sévère ou atteinte multi-organes."},
+        8: {"name": "Sky Water - Guérison Maximale", "description": "Séance maximale de 3 heures. Pour maladies dégénératives, symptômes neurologiques graves, récupération post-chimiothérapie ou pathologie psychiatrique sévère avec composante somatique."},
+        9: {"name": "Sky Water - Transformation Totale", "description": "Séances prolongées jusqu'à amélioration durable. Pour tableaux critiques, terminaux ou chroniques multi-systémiques de haute complexité nécessitant une intervention continue."}
+    },
+    "ja": {
+        1: {"name": "Sky Water - ファーストコンタクト", "description": "30分診断セッション。活動性症状のない方や予防的ガイダンスを求める方向けの初期評価。"},
+        2: {"name": "Sky Water - 初期パルス", "description": "30分セッション。軽度の疲労感、散発的な頭痛、状況的なストレス、または初めてエネルギー療法を試す方向け。"},
+        3: {"name": "Sky Water - 穏やかな波動", "description": "45分セッション。繰り返す疲労、頻繁な頭痛、持続的な腰痛・頸部痛、中等度不眠、軽度不安障害に対応。"},
+        4: {"name": "Sky Water - アクティブカレント", "description": "集中60分セッション。強い急性疼痛、反復性片頭痛、関節痛、不安障害、ホルモンバランス異常、機能性消化器疾患（胃炎・過敏性腸症候群）に対応。"},
+        5: {"name": "Sky Water - 深部イマージョン", "description": "深い90分セッション。数ヶ月・数年続く慢性疾患：線維筋痛症、慢性疲労症候群、臨床的うつ病、子宮内膜症、甲状腺機能障害、神経障害性疼痛に対応。"},
+        6: {"name": "Sky Water - 高度なレゾナンス", "description": "高度な2時間セッション。複数同時病態、確立した自己免疫疾患、末梢神経障害、身体化を伴うPTSD、複雑なホルモン障害に対応。"},
+        7: {"name": "Sky Water - 拡張波動", "description": "プレミアム2.5時間セッション。術後回復、ロングCOVID、自律神経失調症、重度副腎不全、多臓器関与に対応。"},
+        8: {"name": "Sky Water - 最大ヒーリング", "description": "最大3時間セッション。変性疾患、重篤な神経症状、化学療法後回復、身体的要素を伴う重篤な精神疾患に対応。"},
+        9: {"name": "Sky Water - 完全変容", "description": "持続的改善まで延長セッション。継続的介入を要する重篤・末期・高複雑度の多系統慢性疾患に対応。"}
+    },
+    "ar": {
+        1: {"name": "Sky Water - التواصل الأول", "description": "جلسة تشخيصية 30 دقيقة. مخصصة لمن يسعى للتقييم الأولي دون أعراض نشطة أو التوجيه الوقائي."},
+        2: {"name": "Sky Water - النبض الأولي", "description": "جلسة 30 دقيقة. للإرهاق الخفيف المتقطع، الصداع العرضي، التوتر الظرفي، أو المستخدمين الجدد."},
+        3: {"name": "Sky Water - الموجة اللطيفة", "description": "جلسة 45 دقيقة. للإرهاق المتكرر، الصداع المتكرر، آلام الظهر أو الرقبة المستمرة، الأرق المعتدل، واضطراب القلق الخفيف."},
+        4: {"name": "Sky Water - التيار النشط", "description": "جلسة مكثفة 60 دقيقة. للألم الحاد الشديد، الصداع النصفي المتكرر، آلام المفاصل الواضحة، اضطراب القلق، اختلال هرموني، أو أمراض الجهاز الهضمي الوظيفية (التهاب المعدة، القولون العصبي)."},
+        5: {"name": "Sky Water - الغمر العميق", "description": "جلسة عميقة 90 دقيقة. للأمراض المزمنة التي تستمر شهوراً أو سنوات: الفيبروميالجيا، متلازمة التعب المزمن، الاكتئاب السريري، بطانة الرحم المهاجرة، خلل وظيفة الغدة الدرقية."},
+        6: {"name": "Sky Water - الرنين المتقدم", "description": "جلسة متقدمة ساعتين. لأمراض متعددة متزامنة، مرض مناعي ذاتي راسخ، اعتلال الأعصاب الطرفي، اضطراب ما بعد الصدمة مع تجسيم جسدي."},
+        7: {"name": "Sky Water - الموجة الموسعة", "description": "جلسة مميزة 2.5 ساعة. للتعافي بعد الجراحة، COVID الطويل، خلل الجهاز العصبي اللاإرادي، قصور الغدة الكظرية الحاد، أو تأثر أعضاء متعددة."},
+        8: {"name": "Sky Water - الشفاء الأقصى", "description": "جلسة قصوى 3 ساعات. للأمراض التنكسية، الأعراض العصبية الشديدة، التعافي بعد العلاج الكيميائي، أو اضطراب نفسي شديد مع مكون جسدي."},
+        9: {"name": "Sky Water - التحول الكامل", "description": "جلسات ممتدة حتى التحسن المستدام. للحالات الحرجة أو المزمنة متعددة الأجهزة عالية التعقيد التي تستلزم تدخلاً مستمراً."}
+    },
+    "ru": {
+        1: {"name": "Sky Water - Первый Контакт", "description": "Диагностический сеанс 30 мин. Для первичной оценки без активных симптомов или профилактической консультации."},
+        2: {"name": "Sky Water - Начальный Импульс", "description": "Сеанс 30 мин. При лёгкой периодической усталости, эпизодических головных болях, ситуативном стрессе или для новых пользователей."},
+        3: {"name": "Sky Water - Мягкая Волна", "description": "Сеанс 45 мин. При рецидивирующей усталости, частых головных болях, стойких болях в спине или шее, умеренной бессоннице и лёгком тревожном расстройстве."},
+        4: {"name": "Sky Water - Активный Поток", "description": "Интенсивный сеанс 60 мин. При сильной острой боли, рецидивирующей мигрени, выраженной артралгии, тревожном расстройстве, гормональном дисбалансе или функциональной патологии ЖКТ (гастрит, СРК)."},
+        5: {"name": "Sky Water - Глубокое Погружение", "description": "Глубокий сеанс 90 мин. При хронических состояниях месяцами или годами: фибромиалгия, синдром хронической усталости, клиническая депрессия, эндометриоз, дисфункция щитовидной железы."},
+        6: {"name": "Sky Water - Продвинутый Резонанс", "description": "Продвинутый 2-часовой сеанс. При множественных одновременных патологиях, установленном аутоиммунном заболевании, периферической нейропатии, ПТСР с соматизацией."},
+        7: {"name": "Sky Water - Расширенная Волна", "description": "Премиум 2,5-часовой сеанс. При постоперационном восстановлении, Long COVID, дисавтономии, тяжёлой надпочечниковой недостаточности или полиорганном поражении."},
+        8: {"name": "Sky Water - Максимальное Исцеление", "description": "Максимальный 3-часовой сеанс. При дегенеративных заболеваниях, тяжёлой неврологической симптоматике, восстановлении после химиотерапии или тяжёлой психической патологии с соматическим компонентом."},
+        9: {"name": "Sky Water - Полная Трансформация", "description": "Расширенные сеансы до устойчивого улучшения. Для критических, терминальных или высококомплексных полисистемных хронических состояний, требующих непрерывного вмешательства."}
+    },
+    "zh": {
+        1: {"name": "Sky Water - 首次接触", "description": "30分钟诊断疗程。适合无活跃症状、寻求初步评估或预防性指导的用户。"},
+        2: {"name": "Sky Water - 初始脉冲", "description": "30分钟疗程。针对偶发轻度疲劳、散发性头痛、情境性压力或首次尝试能量疗愈的用户。"},
+        3: {"name": "Sky Water - 柔和波动", "description": "45分钟疗程。针对反复疲劳、频繁头痛、持续腰背或颈部疼痛、中度失眠及轻度焦虑障碍。"},
+        4: {"name": "Sky Water - 活跃流动", "description": "60分钟强化疗程。针对强烈急性疼痛、反复偏头痛、明显关节痛、焦虑障碍、激素失调或功能性消化系统疾病（胃炎、肠易激综合征）。"},
+        5: {"name": "Sky Water - 深度浸入", "description": "90分钟深度疗程。针对持续数月或数年的慢性病症：纤维肌痛、慢性疲劳综合征、临床抑郁、子宫内膜异位症、甲状腺功能障碍或神经性疼痛。"},
+        6: {"name": "Sky Water - 高级共振", "description": "2小时高级疗程。针对多种同时存在的病理状况、确诊自身免疫疾病、外周神经病变、伴有躯体化的PTSD或复杂激素障碍。"},
+        7: {"name": "Sky Water - 扩展波动", "description": "2.5小时尊享疗程。针对术后恢复、长新冠、自主神经功能紊乱、严重肾上腺功能不全或多器官受累。"},
+        8: {"name": "Sky Water - 极致疗愈", "description": "3小时极致疗程。针对退行性疾病、严重神经系统症状、化疗后恢复或伴有躯体成分的严重精神障碍。"},
+        9: {"name": "Sky Water - 全面蜕变", "description": "持续疗程直至稳定改善。针对需要持续干预的危重、终末期或高复杂度多系统慢性病症。"}
+    }
+}
+
+def _keyword_score(symptoms: str) -> int:
+    """Deterministic fallback level scorer based on keyword matching."""
+    text = symptoms.lower()
+    score = 3  # minimum for any real symptom
+
+    # Severity intensifiers → bump to ≥ 4
+    intensifiers = [
+        "fuerte", "intenso", "intensa", "severo", "severa", "agudo", "aguda",
+        "insoportable", "horrible", "terrible", "muy", "bastante", "mucho",
+        "strong", "intense", "severe", "sharp", "unbearable", "horrible", "terrible", "very",
+    ]
+    if any(w in text for w in intensifiers):
+        score = max(score, 4)
+
+    # Chronic / long-term → bump to ≥ 5
+    chronic_markers = [
+        "crónico", "crónica", "años", "meses", "siempre", "desde niño", "desde pequeño",
+        "toda la vida", "no se va", "no desaparece", "permanente", "constante",
+        "chronic", "years", "months", "always", "lifelong", "won't go away", "constant", "permanent",
+    ]
+    if any(w in text for w in chronic_markers):
+        score = max(score, 5)
+
+    # High-severity conditions → level 5-6
+    severe_conditions = [
+        "fibromialgia", "fibromyalgia", "lupus", "artritis", "arthritis",
+        "endometriosis", "tiroides", "thyroid", "autoinmune", "autoimmune",
+        "depresión", "depression", "ansiedad severa", "severe anxiety",
+        "fatiga crónica", "chronic fatigue", "insomnio crónico", "chronic insomnia",
+        "gastritis", "colitis", "crohn", "intestino irritable", "irritable bowel",
+    ]
+    if any(w in text for w in severe_conditions):
+        score = max(score, 5)
+
+    # Very severe / complex → level 6-7
+    very_severe = [
+        "cáncer", "cancer", "tumor", "neuropatía", "neuropathy", "parkinson",
+        "esclerosis", "sclerosis", "post-quirúrgico", "post-surgical", "quimioterapia",
+        "chemotherapy", "covid largo", "long covid", "post-covid",
+    ]
+    if any(w in text for w in very_severe):
+        score = max(score, 7)
+
+    # Count distinct symptom mentions to escalate further
+    symptom_words = [
+        "dolor", "pain", "fatiga", "fatigue", "cabeza", "headache", "migraña", "migraine",
+        "espalda", "back", "cuello", "neck", "estómago", "stomach", "tos", "cough",
+        "insomnio", "insomnia", "ansiedad", "anxiety", "estrés", "stress",
+        "náuseas", "nausea", "mareo", "dizziness", "articulaciones", "joints",
+    ]
+    symptom_count = sum(1 for w in symptom_words if w in text)
+    if symptom_count >= 3:
+        score = min(9, score + 1)
+    if symptom_count >= 5:
+        score = min(9, score + 1)
+
+    return score
+
+
+@api_router.post("/symptom-analyzer", response_model=SymptomAnalysisResponse)
+async def analyze_symptoms(data: SymptomAnalysisRequest):
+    session_id = data.session_id or str(uuid.uuid4())
+    lang = data.language if data.language in ["es", "en", "it", "pt", "de", "fr", "ja", "ar", "ru", "zh"] else "en"
+    
+    # Language-specific instructions
+    lang_instructions = {
+        "es": "Responde SIEMPRE en español",
+        "en": "ALWAYS respond in English",
+        "it": "Rispondi SEMPRE in italiano",
+        "pt": "Responda SEMPRE em português",
+        "de": "Antworte IMMER auf Deutsch",
+        "fr": "Réponds TOUJOURS en français",
+        "ja": "必ず日本語で回答してください",
+        "ar": "أجب دائماً باللغة العربية",
+        "ru": "Отвечай ВСЕГДА на русском языке",
+        "zh": "请始终用中文回答",
+    }
+    
+    system_message = f"""You are a wellness consultant for Sky Water, a quantum energy healing platform.
+{lang_instructions.get(lang, lang_instructions["en"])}.
+
+Analyze the physical and emotional symptoms the user describes and recommend the most appropriate healing level (1-9).
+
+HEALING LEVELS — physical symptom guide:
+1. Very mild: slight tiredness after a busy week, minor seasonal sniffles, curiosity about wellness with no active symptoms.
+2. Mild: occasional headaches, mild insomnia once in a while, low energy some days, mild digestive discomfort.
+3. Moderate: frequent fatigue, recurring headaches, ongoing back or neck pain, regular sleep problems, mild anxiety.
+4. Significant: strong persistent cough, intense or recurring migraines, notable joint pain, frequent anxiety or panic, hormonal imbalance, clear digestive issues such as gastritis or IBS.
+5. Chronic: symptoms lasting months or years, fibromyalgia, chronic pain syndromes, autoimmune flare-ups, deep depression, chronic fatigue syndrome, endometriosis, thyroid issues.
+6. Severe chronic: multiple simultaneous conditions, long-term autoimmune disease, neuropathy, serious hormonal disorders, trauma with physical manifestations.
+7. Deep systemic: post-surgical recovery, long COVID symptoms, nervous system dysregulation, severe adrenal fatigue, multiple organ involvement.
+8. Complex multi-system: degenerative conditions, serious neurological symptoms, post-chemotherapy recovery, severe mental health combined with physical illness.
+9. Critical or palliative support: terminal or near-terminal diagnosis, extreme multi-system failure, profound spiritual crisis combined with severe physical illness.
+
+MANDATORY RULES — follow exactly:
+- Minimum recommended level for ANY real physical symptom: 3.
+- If the user describes symptoms as "strong", "intense", "sharp", "severe", "unbearable", or similar intensifiers → minimum level 4.
+- If symptoms are described as "chronic", "for years", "since childhood", "always", or "won't go away" → minimum level 5.
+- Each additional distinct symptom or condition beyond the first → add +1 to the base level (max 9).
+- NEVER recommend level 1 or 2 unless the user explicitly states they have NO symptoms and are just curious.
+- When in doubt, round UP, not down. It is better to over-recommend than under-recommend.
+
+OUTPUT FORMAT — respond ONLY with valid JSON, no other text before or after:
+{{"analysis": "<empathetic analysis in the required language, 2-4 sentences>", "recommended_level": <integer 1-9>}}"""
+
+    import json as _json
+
+    OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+
+    def _keyword_fallback_response(symptoms: str, lang: str) -> dict:
+        """Return a language-specific empathetic message using keyword scoring."""
+        level = _keyword_score(symptoms)
+        messages = {
+            "es": f"Basándonos en los síntomas que describes, hemos identificado el nivel de sanación más adecuado para ti. Tu cuerpo tiene la capacidad de recuperarse — necesitas la energía correcta para activar ese proceso.",
+            "en": f"Based on the symptoms you describe, we have identified the most appropriate healing level for you. Your body has the capacity to recover — you need the right energy to activate that process.",
+            "it": f"In base ai sintomi descritti, abbiamo identificato il livello di guarigione più adatto per te. Il tuo corpo ha la capacità di riprendersi — hai bisogno dell'energia giusta per attivare quel processo.",
+            "pt": f"Com base nos sintomas descritos, identificamos o nível de cura mais adequado para você. Seu corpo tem a capacidade de se recuperar — você precisa da energia certa para ativar esse processo.",
+            "de": f"Basierend auf den beschriebenen Symptomen haben wir die am besten geeignete Heilungsstufe für Sie identifiziert. Ihr Körper hat die Fähigkeit, sich zu erholen — Sie brauchen die richtige Energie, um diesen Prozess zu aktivieren.",
+            "fr": f"Sur la base des symptômes décrits, nous avons identifié le niveau de guérison le plus approprié pour vous. Votre corps a la capacité de se rétablir — vous avez besoin de la bonne énergie pour activer ce processus.",
+            "ja": f"説明された症状に基づいて、あなたに最適な癒しのレベルを特定しました。あなたの体には回復する力があります — そのプロセスを活性化するには正しいエネルギーが必要です。",
+            "ar": f"استناداً إلى الأعراض التي وصفتها، حددنا مستوى الشفاء الأنسب لك. جسمك لديه القدرة على التعافي — تحتاج إلى الطاقة الصحيحة لتفعيل هذه العملية.",
+            "ru": f"На основании описанных вами симптомов мы определили наиболее подходящий уровень исцеления для вас. Ваш организм способен восстановиться — вам нужна правильная энергия, чтобы активировать этот процесс.",
+            "zh": f"根据您描述的症状，我们为您确定了最合适的疗愈级别。您的身体具有恢复的能力 — 您需要正确的能量来激活这个过程。",
+        }
+        return {
+            "analysis": messages.get(lang, messages["en"]),
+            "recommended_level": level,
+        }
+
+    recommended_level = 3
+    analysis_text = ""
+
+    # Try LiteLLM with OPENAI_API_KEY if available
+    if OPENAI_API_KEY:
+        try:
+            import litellm
+            import json as _json2
+            litellm.api_key = OPENAI_API_KEY
+            llm_response = await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": data.symptoms},
+                ],
+                temperature=0.4,
+                max_tokens=400,
+            )
+            raw = llm_response.choices[0].message.content or ""
+            clean = raw.strip()
+            if clean.startswith("```"):
+                parts = clean.split("```")
+                clean = parts[1] if len(parts) > 1 else clean
+                if clean.startswith("json"):
+                    clean = clean[4:]
+            parsed = _json2.loads(clean.strip())
+            analysis_text = parsed.get("analysis", raw)
+            raw_level = int(parsed.get("recommended_level", 3))
+            recommended_level = min(9, max(1, raw_level))
+        except Exception as llm_err:
+            logging.warning(f"LiteLLM failed, using keyword fallback: {llm_err}")
+            fallback = _keyword_fallback_response(data.symptoms, lang)
+            analysis_text = fallback["analysis"]
+            recommended_level = fallback["recommended_level"]
+    else:
+        # No API key — use deterministic keyword fallback (always works, never 500)
+        fallback = _keyword_fallback_response(data.symptoms, lang)
+        analysis_text = fallback["analysis"]
+        recommended_level = fallback["recommended_level"]
+
+    level_info = LEVEL_INFO.get(lang, LEVEL_INFO["es"]).get(recommended_level, LEVEL_INFO["es"][3])
+
+    return SymptomAnalysisResponse(
+        analysis=analysis_text,
+        recommended_level=recommended_level,
+        level_name=level_info["name"],
+        level_description=level_info["description"],
+        session_id=session_id
+    )
+
 # ============== TESTIMONIALS ROUTES ==============
 
 @api_router.get("/testimonials", response_model=List[Testimonial])
 async def get_testimonials(page: int = 1, limit: int = 12, level: Optional[int] = None):
     skip = (page - 1) * limit
-    query = {}
+    query = {"$or": [{"status": "approved"}, {"status": {"$exists": False}}]}
     if level:
         query["level"] = level
-    
+
     testimonials = await db.testimonials.find(query).skip(skip).limit(limit).to_list(limit)
     return [Testimonial(**t) for t in testimonials]
 
 @api_router.get("/testimonials/count")
-async def get_testimonials_count():
-    count = await db.testimonials.count_documents({})
+async def get_testimonials_count(level: Optional[int] = None):
+    query = {"$or": [{"status": "approved"}, {"status": {"$exists": False}}]}
+    if level:
+        query["level"] = level
+    count = await db.testimonials.count_documents(query)
     return {"count": count}
 
 @api_router.post("/testimonials/seed")
@@ -971,59 +1386,152 @@ async def reseed_testimonials():
     return {"message": f"Reseeded {len(sample_testimonials)} testimonials", "seeded": True}
 
 def generate_testimonials():
-    first_names_male = ["Carlos", "Miguel", "Juan", "Pedro", "Roberto", "Fernando", "Diego", "Andrés", "Ricardo", "Jorge"]
-    first_names_female = ["María", "Sofía", "Laura", "Ana", "Carmen", "Isabel", "Patricia", "Lucía", "Elena", "Claudia"]
-    last_initials = ["A", "B", "C", "D", "E", "F", "G", "H", "L", "M", "N", "O", "P", "R", "S", "T", "V"]
+    # Nombres más diversos y realistas
+    first_names_male = ["Carlos", "Miguel", "Juan", "Pedro", "Roberto", "Fernando", "Diego", "Andrés", "Ricardo", "Jorge", "Antonio", "David", "Alejandro", "Luis", "Javier", "Manuel", "Pablo", "Sergio", "Raúl", "Alberto", "Tomás", "Víctor", "Enrique", "Francisco", "Daniel"]
+    first_names_female = ["María", "Sofía", "Laura", "Ana", "Carmen", "Isabel", "Patricia", "Lucía", "Elena", "Claudia", "Rosa", "Valentina", "Gabriela", "Andrea", "Mariana", "Paula", "Daniela", "Carolina", "Fernanda", "Mónica", "Verónica", "Natalia", "Adriana", "Diana", "Silvia"]
+    last_initials = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "Z"]
     
     locations = [
-        "Ciudad de México, México", "Monterrey, México", "Guadalajara, México",
-        "Madrid, España", "Barcelona, España", "Buenos Aires, Argentina",
-        "Bogotá, Colombia", "Lima, Perú", "Santiago, Chile", "Miami, USA"
+        "Ciudad de México", "Monterrey", "Guadalajara", "Puebla", "Cancún",
+        "Madrid", "Barcelona", "Valencia", "Sevilla",
+        "Buenos Aires", "Córdoba", "Rosario",
+        "Bogotá", "Medellín", "Cartagena",
+        "Lima", "Arequipa",
+        "Santiago", "Valparaíso",
+        "Miami", "Los Angeles", "Houston", "Nueva York",
+        "São Paulo", "Rio de Janeiro"
     ]
     
     level_names = {
-        1: "Revisión Pre-Tratamiento",
-        2: "Ligero Rocío de Sky Water",
-        3: "Una Gota de Sky Water", 
-        4: "Un Shot de Sky Water", 
-        5: "Una Copa de Sky Water",
-        6: "500ml de Sky Water", 
-        7: "1 Litro de Sky Water", 
-        8: "2 Litros de Sky Water",
-        9: "Una Fuente de Sky Water"
+        1: "Sesión Introductoria",
+        2: "Sesión Ligera",
+        3: "Sesión Estándar", 
+        4: "Sesión Extendida", 
+        5: "Sesión Premium",
+        6: "Sesión Deluxe", 
+        7: "Sesión Intensiva", 
+        8: "Sesión Completa",
+        9: "Sesión Ilimitada"
     }
     
+    # Testimonios humanizados, variados y enfocados en bienestar
     testimonial_texts = {
-        1: ["La revisión me ayudó a entender exactamente qué necesitaba sanar. Muy revelador.", "El diagnóstico energético fue preciso. Ahora sé por dónde empezar mi sanación.", "Por solo $4.99 obtuve claridad sobre mi condición. Excelente primer paso."],
-        2: ["Tenía una molestia leve en el cuello por dormir mal. En unas horas se fue completamente.", "Un dolor de cabeza menor que no me dejaba concentrar. Desapareció al poco tiempo.", "Probé Sky Water por primera vez con una incomodidad muscular. Me convenció al instante."],
-        3: ["Tenía un dolor de cabeza leve. Después de Sky Water, desapareció en horas. Increíble.", "Molestia menor en el hombro. Al día siguiente ya no sentía nada."],
-        4: ["Dolor de muelas insoportable y a las 3 horas ya no sentía nada. Impresionante.", "Un dolor de espalda agudo. Sky Water lo resolvió en un día."],
-        5: ["Llevaba 5 AÑOS con migrañas. Sky Water me devolvió mi vida.", "Mi artritis en las manos me impedía trabajar. Ahora puedo escribir sin dolor."],
-        6: ["Un virus respiratorio me tenía muy mal. Sky Water me ayudó a recuperarme.", "Infección persistente que no cedía. Con Sky Water mejoré."],
-        7: ["Migrañas que me incapacitaban 3 veces por semana. Ahora vivo normalmente.", "Dolores crónicos de una década. Por fin encontré alivio."],
-        8: ["Hernia discal L4-L5. Sky Water me salvó de la cirugía.", "Dolor de espalda por desplazamiento vertebral. Ahora vivo sin dolor."],
-        9: ["Diabetes, hipertensión y dolor crónico. La mejora fue integral.", "Múltiples condiciones. Sky Water trabajó en todas simultáneamente."]
+        1: [
+            "Entré con curiosidad y salí convencida. La sesión introductoria me dio exactamente lo que necesitaba para entender de qué se trata esto.",
+            "Sinceramente no esperaba mucho, pero la evaluación inicial fue muy acertada. Me sorprendió gratamente.",
+            "Por el precio, valió completamente la pena. Me ayudó a identificar qué áreas de mi vida necesitan más atención.",
+            "Mi hermana me lo recomendó y ahora entiendo por qué. Buen primer paso.",
+            "Nunca había probado algo así. La sesión fue tranquila y me sentí escuchado/a.",
+            "Tenía mis dudas pero decidí darle una oportunidad. No me arrepiento.",
+        ],
+        2: [
+            "Llevaba semanas sin poder relajarme de verdad. Esta sesión me devolvió esa calma que tanto necesitaba.",
+            "El estrés del trabajo me tenía agotada. Después de la sesión dormí como no lo hacía en meses.",
+            "No soy de creer en estas cosas, pero algo cambió. Me siento más tranquilo.",
+            "Mi esposa notó el cambio antes que yo. Dice que estoy más presente y menos irritable.",
+            "Probé meditación, yoga, de todo... esto fue diferente. Algo hizo clic.",
+            "Sesión corta pero efectiva. Justo lo que necesitaba en medio de una semana caótica.",
+            "Me lo recomendó un amigo escéptico como yo. Ahora ambos somos clientes regulares jaja",
+        ],
+        3: [
+            "Tres sesiones y ya noto una diferencia real en cómo manejo el estrés diario.",
+            "El insomnio era mi compañero de años. Ahora duermo profundamente casi todas las noches.",
+            "Me ayudó a soltar tensiones que ni sabía que cargaba. Literalmente me siento más ligera.",
+            "Después de la sesión tuve una claridad mental que hacía tiempo no experimentaba.",
+            "Empecé por curiosidad, sigo porque realmente funciona para mí.",
+            "No sé explicar exactamente qué pasa, pero termino cada sesión sintiéndome renovada.",
+        ],
+        4: [
+            "La sesión extendida vale cada peso. Salí como nueva después de meses de sentirme agotada.",
+            "Increíble cómo una hora puede cambiar tu perspectiva. Me sentí escuchada y atendida.",
+            "Venía arrastrando el cansancio de todo el año. Una sesión y ya respiro diferente.",
+            "Mi terapeuta me sugirió complementar con algo así. Gran decisión.",
+            "El tiempo pasa volando durante la sesión. Cuando termina no quieres que acabe.",
+            "Después de esta sesión tomé decisiones que venía postergando. Claridad total.",
+        ],
+        5: [
+            "Cinco meses viniendo y mi calidad de vida mejoró notablemente. Mi familia también lo nota.",
+            "Invertir en bienestar no es un lujo, es necesidad. Esta sesión me lo confirmó.",
+            "Antes vivía estresada 24/7. Ahora tengo herramientas para manejar mejor los días difíciles.",
+            "La sesión premium es otro nivel. Profunda, transformadora, vale completamente la pena.",
+            "Mi médico me preguntó qué estaba haciendo diferente porque mis niveles de estrés bajaron.",
+            "No cambié nada más en mi rutina. Solo estas sesiones. Y la diferencia es notable.",
+        ],
+        6: [
+            "Dos horas que se sienten como un retiro de fin de semana. Desconectas completamente.",
+            "Llegué agotada física y emocionalmente. Salí sintiéndome como después de unas vacaciones.",
+            "Esta sesión me ayudó a procesar cosas que llevaba guardando mucho tiempo.",
+            "Mi regalo de cumpleaños para mí misma. Mejor decisión del año.",
+            "Después de esta sesión renuncié a un trabajo que me hacía infeliz. Gracias por la claridad.",
+        ],
+        7: [
+            "La sesión intensiva es para quienes realmente quieren un cambio profundo. No es para curiosos.",
+            "Meses de terapia tradicional no lograron lo que logré en estas sesiones. Complemento perfecto.",
+            "Llegué siendo una persona, salí siendo otra. Suena exagerado pero así lo sentí.",
+            "Mi esposo no entendía por qué seguía viniendo. Ahora él también tiene sus citas.",
+            "Esta sesión me ayudó a reconectar conmigo misma después de años de solo existir.",
+        ],
+        8: [
+            "La sesión completa es una inversión en ti mismo que paga dividendos toda la vida.",
+            "Tres horas de trabajo profundo. Terminé agotada pero liberada de tanto peso.",
+            "Después de esta sesión perdoné cosas que cargaba desde la infancia. Transformador.",
+            "Mi mejor amiga y yo lo hicimos juntas. Fortalecimos nuestra conexión además de sentirnos increíbles.",
+        ],
+        9: [
+            "El paquete ilimitado cambió mi vida. No exagero. Soy otra persona.",
+            "Cuando encuentras algo que funciona, inviertes en ello. Simple.",
+            "Mi familia pensaba que estaba loca por gastar en esto. Ahora todos quieren probarlo.",
+        ]
     }
     
-    months = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-    
+    # Ratings más realistas (no todos 5 estrellas)
+    rating_weights = [4, 4, 4, 5, 5, 5, 5, 5, 5, 5]  # Mayoría 5, algunos 4
+
+    months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+    years = ["2024", "2025"]
+
     testimonials = []
-    level_counts = {1: 120, 2: 95, 3: 74, 4: 98, 5: 123, 6: 88, 7: 59, 8: 39, 9: 9}
-    
+    level_counts = {1: 45, 2: 52, 3: 38, 4: 41, 5: 35, 6: 28, 7: 19, 8: 12, 9: 6}
+
+    used_text_combos = set()
+
     for level, count in level_counts.items():
         texts = testimonial_texts[level]
+        # Shuffle texts first, then cycle — ensures earliest entries have most variety
+        shuffled_texts = texts[:]
+        random.shuffle(shuffled_texts)
+        text_cycle = (shuffled_texts * ((count // len(shuffled_texts)) + 2))
+        random.shuffle(text_cycle)
+
+        text_index = 0
         for i in range(count):
-            name = random.choice(first_names_female if random.random() > 0.5 else first_names_male)
+            while True:
+                is_female = random.random() > 0.45
+                name = random.choice(first_names_female if is_female else first_names_male)
+                initial = random.choice(last_initials)
+                location = random.choice(locations)
+                # Pick next text that hasn't been used with this name+location combo
+                text = text_cycle[text_index % len(text_cycle)]
+                text_index += 1
+
+                combo = f"{name}{initial}{location}{text[:30]}"
+                if combo not in used_text_combos:
+                    used_text_combos.add(combo)
+                    break
+
+            month = random.choice(months)
+            year = random.choice(years)
+
             testimonials.append(Testimonial(
-                name=f"{name} {random.choice(last_initials)}.",
-                rating=5,
-                location=random.choice(locations),
+                name=f"{name} {initial}.",
+                rating=random.choice(rating_weights),
+                location=location,
                 level=level,
                 level_name=level_names[level],
-                text=random.choice(texts),
-                date=f"{random.choice(months)} {random.choice(['2024', '2025'])}"
+                text=text,
+                date=f"{month} {year}"
             ))
-    
+
     random.shuffle(testimonials)
     return testimonials
 
@@ -1038,6 +1546,7 @@ class AppointmentSlot(BaseModel):
     order_id: str
     product_name: str
     status: str = "confirmed"
+    google_event_id: Optional[str] = None  # Google Calendar event ID (set after booking)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class AppointmentCreate(BaseModel):
@@ -1048,8 +1557,74 @@ class AppointmentCreate(BaseModel):
     patient_name: str
     product_name: str
 
-# In-memory appointments storage
-appointments_db: List[dict] = []
+# Appointments are persisted in MongoDB (db.appointments collection)
+
+# ============== TELEGRAM INSTANT NOTIFICATIONS ==============
+
+async def send_telegram_notification(apt_data: dict, product_name: str, order: dict = None):
+    """Send an instant Telegram message when a new appointment is booked.
+
+    Fires immediately after MongoDB insert — independent of email/Calendar.
+    Fails silently so it never blocks the booking flow.
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        logger.warning("Telegram not configured — skipping instant notification")
+        return
+
+    try:
+        patient_data = order.get("patient_data", {}) if order else {}
+        symptoms = patient_data.get("symptoms", "No especificado")
+        city = patient_data.get("city", "")
+        country = patient_data.get("country", "")
+        location_str = f"{city}, {country}".strip(", ") or "No especificado"
+
+        # Format date/time nicely
+        import pytz
+        mexico_tz = pytz.timezone("America/Mexico_City")
+        try:
+            dt = datetime.strptime(f"{apt_data['date']} {apt_data['time']}", "%Y-%m-%d %H:%M")
+            dt_local = mexico_tz.localize(dt)
+            weekdays_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+            weekday = weekdays_es[dt_local.weekday()]
+            date_fmt = f"{weekday} {dt_local.day} de {dt_local.strftime('%B')} · {apt_data['time']} hrs"
+        except Exception:
+            date_fmt = f"{apt_data['date']} · {apt_data['time']} hrs"
+
+        # Truncate symptoms to keep message readable
+        symptoms_short = symptoms[:300] + "..." if len(symptoms) > 300 else symptoms
+
+        message = (
+            f"🌊 *NUEVA CITA SKY WATER*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 *Paciente:* {apt_data['patient_name']}\n"
+            f"📧 *Email:* {apt_data['patient_email']}\n"
+            f"💊 *Servicio:* {product_name}\n"
+            f"📅 *Fecha:* {date_fmt}\n"
+            f"📍 *Ubicación:* {location_str}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🩺 *Síntomas:*\n{symptoms_short}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🧾 Orden: `{apt_data['order_id']}`"
+        )
+
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "Markdown",
+            "disable_notification": False,  # Always ring with sound
+        }
+
+        async with httpx.AsyncClient() as client_http:
+            resp = await client_http.post(url, json=payload, timeout=10)
+            if resp.status_code == 200:
+                logger.info(f"✅ Telegram notification sent for {apt_data['patient_name']}")
+            else:
+                logger.error(f"Telegram API error {resp.status_code}: {resp.text}")
+
+    except Exception as e:
+        logger.error(f"Failed to send Telegram notification: {e}")
+
 
 # Email configuration
 SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.gmail.com')
@@ -1132,7 +1707,7 @@ def generate_appointment_confirmation_email(apt_data: dict, product_name: str):
                         <li>Toma 2 vasos de agua con limón y sal sin refinar</li>
                         <li>Durante la sesión, permanece en posición relajada</li>
                         <li>Puedes estar en casa, trabajo o donde prefieras</li>
-                        <li>Evita distracciones durante los 30 minutos</li>
+                        <li>Evita distracciones durante los 45 minutos de tu sesión</li>
                     </ul>
                 </div>
                 
@@ -1148,13 +1723,11 @@ def generate_appointment_confirmation_email(apt_data: dict, product_name: str):
     </html>
     """
 
-def generate_admin_notification_email(apt_data: dict, product_name: str):
+def generate_admin_notification_email(apt_data: dict, product_name: str, week_appointments: list = None):
     """Generate HTML email for admin notification"""
-    # Get weekly calendar
     week_calendar = []
-    for apt in appointments_db:
+    for apt in (week_appointments or []):
         week_calendar.append(f"- {apt['date']} {apt['time']}: {apt['patient_name']} ({apt['product_name']})")
-    
     calendar_html = "<br>".join(week_calendar) if week_calendar else "No hay más citas esta semana"
     
     return f"""
@@ -1218,66 +1791,210 @@ def generate_admin_notification_email(apt_data: dict, product_name: str):
     </html>
     """
 
+# ============== GOOGLE CALENDAR HELPERS ==============
+
+def get_google_calendar_service():
+    """Build Google Calendar API service using stored OAuth2 refresh token."""
+    if not GOOGLE_CALENDAR_AVAILABLE:
+        return None
+    if not all([GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN]):
+        logger.warning("Google Calendar credentials not configured — skipping calendar sync")
+        return None
+    try:
+        creds = Credentials(
+            token=None,
+            refresh_token=GOOGLE_REFRESH_TOKEN,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=GOOGLE_CLIENT_ID,
+            client_secret=GOOGLE_CLIENT_SECRET,
+            scopes=["https://www.googleapis.com/auth/calendar.events"],
+        )
+        return build("calendar", "v3", credentials=creds)
+    except Exception as e:
+        logger.error(f"Failed to build Google Calendar service: {e}")
+        return None
+
+
+async def create_google_calendar_event(apt_data: dict, product_name: str, order: dict = None) -> Optional[str]:
+    """Create a Google Calendar event for a confirmed appointment.
+
+    Returns the Google event ID, or None on failure.
+    Booking is NOT cancelled if this fails — it degrades gracefully.
+    """
+    service = get_google_calendar_service()
+    if not service:
+        return None
+
+    try:
+        mexico_tz = pytz.timezone("America/Mexico_City")
+        date_str = apt_data["date"]   # "2026-05-04"
+        time_str = apt_data["time"]   # "11:00"
+        start_dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+        start_dt = mexico_tz.localize(start_dt)
+        end_dt = start_dt + timedelta(minutes=45)
+
+        # Build rich description with all patient info + symptoms
+        patient_data = order.get("patient_data", {}) if order else {}
+        symptoms = patient_data.get("symptoms", "No especificado")
+        birth_date = patient_data.get("birth_date", "")
+        country = patient_data.get("country", "")
+        state = patient_data.get("state", "")
+        city = patient_data.get("city", "")
+        rfc = patient_data.get("rfc", "")
+
+        description_lines = [
+            f"👤 Paciente: {apt_data['patient_name']}",
+            f"📧 Email: {apt_data['patient_email']}",
+            f"🌊 Servicio: {product_name}",
+            f"🧾 Orden: {apt_data['order_id']}",
+            "",
+            "📍 Ubicación del paciente:",
+            f"   {city}, {state}, {country}",
+        ]
+        if birth_date:
+            description_lines.append(f"🎂 Fecha de nacimiento: {birth_date}")
+        if rfc:
+            description_lines.append(f"🏛️ RFC: {rfc}")
+        description_lines += [
+            "",
+            "🩺 Síntomas / Condición reportada:",
+            symptoms,
+        ]
+
+        event_body = {
+            "summary": f"🌊 Cita Sky Water — {apt_data['patient_name']} — {product_name}",
+            "description": "\n".join(description_lines),
+            "start": {
+                "dateTime": start_dt.isoformat(),
+                "timeZone": "America/Mexico_City",
+            },
+            "end": {
+                "dateTime": end_dt.isoformat(),
+                "timeZone": "America/Mexico_City",
+            },
+            "colorId": "7",  # Peacock (cyan/teal) in Google Calendar
+            "reminders": {
+                "useDefault": False,
+                "overrides": [
+                    {"method": "popup", "minutes": 30},
+                    {"method": "email", "minutes": 30},
+                ],
+            },
+        }
+
+        event = service.events().insert(
+            calendarId=GOOGLE_CALENDAR_ID,
+            body=event_body,
+        ).execute()
+
+        event_id = event.get("id")
+        logger.info(f"✅ Google Calendar event created: {event_id} for {apt_data['patient_name']} on {date_str} {time_str}")
+        return event_id
+
+    except Exception as e:
+        logger.error(f"Google Calendar event creation failed: {e}")
+        return None
+
+
+# ============== APPOINTMENT SLOTS ==============
+
 @api_router.get("/appointments/available-slots")
 async def get_available_slots(date: str = None):
-    """Get available appointment slots for a given date or next 7 days"""
-    from datetime import timedelta
-    import pytz
-    
-    utc_minus_6 = pytz.timezone('America/Mexico_City')
-    today = datetime.now(utc_minus_6).date()
-    
-    # Working hours: 10AM-6PM, lunch break 2PM-4PM
-    working_hours = [
-        "10:00", "10:30", "11:00", "11:30", 
-        "12:00", "12:30", "13:00", "13:30",
-        # 14:00-16:00 is lunch break
-        "16:00", "16:30", "17:00", "17:30"
-    ]
-    
+    """Return all appointment slots (available AND booked) for next 14 weekdays.
+
+    Schedule: Monday–Friday
+    • Morning  : 11:00 · 11:45 · 12:30 · 13:15  (lunch break 14:00–16:00)
+    • Afternoon: 16:00 · 16:45 · 17:15
+    • Slot duration: 45 minutes  •  Max 1 booking per slot
+    """
+    mexico_tz = pytz.timezone('America/Mexico_City')
+    now_local = datetime.now(mexico_tz)
+    today = now_local.date()
+
+    # 45-minute slots — morning before lunch, afternoon after lunch
+    SLOT_TIMES = ["11:00", "11:45", "12:30", "13:15", "16:00", "16:45", "17:15"]
+
     slots = []
     dates_to_check = []
-    
+
     if date:
-        dates_to_check = [datetime.strptime(date, "%Y-%m-%d").date()]
+        try:
+            dates_to_check = [datetime.strptime(date, "%Y-%m-%d").date()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Formato de fecha inválido. Usa YYYY-MM-DD")
     else:
-        # Next 14 days
-        for i in range(14):
+        # Collect the next 14 weekdays
+        count, i = 0, 0
+        while count < 14:
             check_date = today + timedelta(days=i)
-            # Only weekdays (Monday=0 to Friday=4)
-            if check_date.weekday() < 5:
+            i += 1
+            if check_date.weekday() < 5:  # Monday=0 … Friday=4
                 dates_to_check.append(check_date)
-    
+                count += 1
+
     for check_date in dates_to_check:
-        if check_date.weekday() >= 5:  # Skip weekends
+        if check_date.weekday() >= 5:
             continue
-            
+
         date_str = check_date.strftime("%Y-%m-%d")
-        for time_slot in working_hours:
-            # Count existing appointments for this slot
-            existing = sum(1 for apt in appointments_db 
-                         if apt['date'] == date_str and apt['time'] == time_slot)
-            
-            # Max 2 appointments per slot
-            if existing < 2:
-                slots.append({
-                    "date": date_str,
-                    "time": time_slot,
-                    "available_spots": 2 - existing
-                })
-    
+        for time_slot in SLOT_TIMES:
+            # Skip slots whose start time has already passed (only for today)
+            if check_date == today:
+                slot_hour, slot_min = map(int, time_slot.split(":"))
+                if now_local.hour > slot_hour or (
+                    now_local.hour == slot_hour and now_local.minute >= slot_min
+                ):
+                    continue
+
+            existing = await db.appointments.count_documents(
+                {"date": date_str, "time": time_slot, "status": {"$ne": "cancelled"}}
+            )
+
+            # Return all slots (available + booked) so the frontend can show occupied cards
+            slots.append({
+                "date": date_str,
+                "time": time_slot,
+                "available": existing == 0,
+                "available_spots": 1 if existing == 0 else 0,
+            })
+
     return {"slots": slots}
 
 @api_router.post("/appointments/book")
 async def book_appointment(appointment: AppointmentCreate):
-    """Book an appointment slot and send confirmation emails"""
-    # Check if slot is still available
-    existing = sum(1 for apt in appointments_db 
-                  if apt['date'] == appointment.date and apt['time'] == appointment.time)
-    
-    if existing >= 2:
-        raise HTTPException(status_code=400, detail="Este horario ya está lleno")
-    
+    """Book an appointment slot — requires confirmed payment.
+
+    One appointment per slot (strict), one appointment per order.
+    Creates a Google Calendar event on the admin's calendar automatically.
+    """
+
+    # 1. Verify the order exists and is paid
+    order = await db.orders.find_one({"id": appointment.order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden no encontrada")
+    if order.get("payment_status") != "completed":
+        raise HTTPException(
+            status_code=403,
+            detail="El pago no ha sido confirmado. Completa el pago antes de agendar tu cita."
+        )
+
+    # 2. Prevent double-booking the same order
+    already_booked = await db.appointments.find_one(
+        {"order_id": appointment.order_id, "status": {"$ne": "cancelled"}}
+    )
+    if already_booked:
+        raise HTTPException(status_code=400, detail="Esta orden ya tiene una cita agendada")
+
+    # 3. Check slot availability (strict: max 1 appointment per 45-min slot)
+    existing = await db.appointments.count_documents(
+        {"date": appointment.date, "time": appointment.time, "status": {"$ne": "cancelled"}}
+    )
+    if existing >= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Este horario ya está ocupado. Por favor elige otro horario disponible."
+        )
+
     apt_data = {
         "id": str(uuid.uuid4()),
         "date": appointment.date,
@@ -1287,27 +2004,44 @@ async def book_appointment(appointment: AppointmentCreate):
         "order_id": appointment.order_id,
         "product_name": appointment.product_name,
         "status": "confirmed",
+        "google_event_id": None,
         "created_at": datetime.utcnow().isoformat()
     }
-    
-    appointments_db.append(apt_data)
-    
-    # Send confirmation email to patient
+
+    # 4. Persist in MongoDB
+    await db.appointments.insert_one(apt_data)
+
+    # 4b. Send instant Telegram notification (fires immediately, non-blocking)
+    await send_telegram_notification(apt_data, appointment.product_name, order)
+
+    # 4c. Create Google Calendar event (non-blocking — booking succeeds even if this fails)
+    google_event_id = await create_google_calendar_event(apt_data, appointment.product_name, order)
+    if google_event_id:
+        await db.appointments.update_one(
+            {"id": apt_data["id"]},
+            {"$set": {"google_event_id": google_event_id}}
+        )
+        apt_data["google_event_id"] = google_event_id
+
+    # 5. Send confirmation email to patient
     patient_email_html = generate_appointment_confirmation_email(apt_data, appointment.product_name)
     send_appointment_email(
         appointment.patient_email,
         f"✅ Cita Confirmada - Sky Water - {appointment.date}",
         patient_email_html
     )
-    
-    # Send notification email to admin
-    admin_email_html = generate_admin_notification_email(apt_data, appointment.product_name)
+
+    # 6. Send notification email to admin (include upcoming appointments for context)
+    week_apts = await db.appointments.find(
+        {"status": {"$ne": "cancelled"}}, {"_id": 0}
+    ).sort("date", 1).limit(20).to_list(length=20)
+    admin_email_html = generate_admin_notification_email(apt_data, appointment.product_name, week_apts)
     send_appointment_email(
         ADMIN_EMAIL,
-        f"🔔 Nueva Cita: {appointment.patient_name} - {appointment.date} {appointment.time}",
+        f"🔔 Nueva Cita: {appointment.patient_name} — {appointment.date} {appointment.time}",
         admin_email_html
     )
-    
+
     return {
         "success": True,
         "appointment": apt_data,
@@ -1317,14 +2051,111 @@ async def book_appointment(appointment: AppointmentCreate):
 @api_router.get("/appointments/my-appointments/{order_id}")
 async def get_my_appointments(order_id: str):
     """Get appointments for a specific order"""
-    user_appointments = [apt for apt in appointments_db if apt['order_id'] == order_id]
+    cursor = db.appointments.find({"order_id": order_id}, {"_id": 0})
+    user_appointments = await cursor.to_list(length=20)
     return {"appointments": user_appointments}
 
 # ============== HOW IT WORKS - SCIENTIFIC BASIS ==============
 
 @api_router.get("/how-it-works")
-async def get_how_it_works():
+async def get_how_it_works(lang: str = "es"):
     """Get the scientific basis and explanation of energy healing"""
+    
+    if lang == "en":
+        return {
+            "title": "How Does Sky Water Work?",
+            "subtitle": "The Science Behind Energy Healing",
+            "introduction": """
+Sky Water uses principles of distance energy healing, a practice supported by recent scientific research. 
+Our method is based on the transmission of quantum bioenergy that operates independently of physical distance, 
+allowing a direct energetic connection between the healer and the recipient.
+            """,
+            "scientific_studies": [
+                {
+                    "title": "Controlled Clinical Study on Distance Energy Healing",
+                    "source": "National Institutes of Health (NIH) - PubMed Central",
+                    "year": "2024",
+                    "reference": "PMC11392496",
+                    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11392496/",
+                    "summary": "A randomized, double-blind, placebo-controlled clinical trial (n=114 adults) demonstrated that distance energy healing significantly improved psychological symptoms such as fatigue, anxiety, depression, sleep problems, and stress (p<0.0001). No adverse effects were reported.",
+                    "key_findings": [
+                        "Significant improvement in all symptoms evaluated",
+                        "Results superior to placebo and control groups",
+                        "No adverse effects reported",
+                        "Improvement in overall quality of life"
+                    ]
+                },
+                {
+                    "title": "Comprehensive Review of 353 Clinical Studies on Biofield Therapy",
+                    "source": "PubMed - Journal of Integrative and Complementary Medicine",
+                    "year": "2025",
+                    "reference": "PMID: 39854162",
+                    "url": "https://pubmed.ncbi.nlm.nih.gov/39854162/",
+                    "summary": "An exhaustive review analyzing 353 peer-reviewed clinical studies (255 randomized controlled trials) on biofield therapies. Nearly half (172 studies) reported positive results in various health conditions.",
+                    "key_findings": [
+                        "353 clinical studies analyzed",
+                        "255 randomized controlled trials (RCTs)",
+                        "172 studies with positive results",
+                        "Demonstrated effectiveness in pain, fatigue, anxiety, and more"
+                    ]
+                },
+                {
+                    "title": "Quantum Mechanisms in Bioenergy Therapy",
+                    "source": "Healing Warriors Program - Review 2024",
+                    "year": "2024",
+                    "reference": "Narrative Review",
+                    "url": "https://www.healingwarriorsprogram.org/",
+                    "summary": "This narrative review proposes quantum mechanisms such as entanglement to explain the effects of biofield therapies. It documents preclinical and clinical evidence showing effectiveness in pain, cancer-related fatigue, stress, and mental health disorders.",
+                    "key_findings": [
+                        "Proposal of quantum mechanisms (entanglement)",
+                        "Effectiveness in multiple conditions",
+                        "Solid theoretical basis for distance healing",
+                        "Integration of quantum physics and biology"
+                    ]
+                }
+            ],
+            "our_method": {
+                "title": "The Sky Water Method",
+                "steps": [
+                    {
+                        "step": 1,
+                        "title": "Initial Connection",
+                        "description": "We use your personal data (full name, location, date of birth) to establish a unique and personalized energetic connection."
+                    },
+                    {
+                        "step": 2,
+                        "title": "Energy Analysis",
+                        "description": "The detailed description of your symptoms allows us to identify the specific energy blockages that require attention."
+                    },
+                    {
+                        "step": 3,
+                        "title": "Bioenergy Transmission",
+                        "description": "During your scheduled appointment, we channel healing energy specifically calibrated for your condition, using quantum resonance principles."
+                    },
+                    {
+                        "step": 4,
+                        "title": "Integration",
+                        "description": "Your body integrates the received energy. It is important to stay hydrated and in a receptive state during and after the session."
+                    }
+                ]
+            },
+            "preparation_instructions": {
+                "title": "Preparing for Your Session",
+                "water_formula": "Multiply your weight in kg by 35ml to get your recommended daily water intake.",
+                "special_water": "Drink at least 2 glasses of water with lemon and a pinch of unrefined coarse salt (without iodine or fluoride) per day. If you don't have unrefined salt, you can use regular table salt occasionally.",
+                "during_session": "During the 30-minute session, stay in a comfortable place (home, work, anywhere) in a relaxed position.",
+                "tips": [
+                    "Be in a quiet environment",
+                    "Comfortable position (sitting or lying down)",
+                    "Keep an open and receptive mind",
+                    "Avoid distractions during the session",
+                    "Drink water before and after the session"
+                ]
+            },
+            "disclaimer": "Sky Water is a complementary energy healing service. It does not replace professional medical diagnosis, treatment, or advice."
+        }
+    
+    # Default: Spanish
     return {
         "title": "¿Cómo Funciona Sky Water?",
         "subtitle": "La Ciencia Detrás de la Sanación Energética",
@@ -1452,6 +2283,710 @@ async def get_guarantee_info():
         "note": "Nuestro compromiso es tu bienestar. Si no experimentas mejoras, queremos saberlo."
     }
 
+# ============== META WEBHOOK ==============
+META_WEBHOOK_VERIFY_TOKEN = "skywater_webhook_2025"
+
+@api_router.get("/webhook")
+async def meta_webhook_verify(request: Request):
+    """Meta webhook verification endpoint"""
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+
+    if mode == "subscribe" and token == META_WEBHOOK_VERIFY_TOKEN:
+        return int(challenge)
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+@api_router.post("/webhook")
+async def meta_webhook_receive(request: Request):
+    """Meta webhook event receiver"""
+    try:
+        data = await request.json()
+        logging.info(f"Meta webhook event received: {data}")
+    except Exception as e:
+        logging.error(f"Meta webhook error: {e}")
+    return {"status": "ok"}
+
+# ============== REFERRAL SYSTEM ==============
+
+class GenerateReferralRequest(BaseModel):
+    email: str
+
+class ApplyReferralRequest(BaseModel):
+    referral_code: str
+    buyer_email: str
+    purchase_level: int  # 1, 2, or 3
+
+# Reward thresholds
+REFERRAL_REWARDS = [
+    {"required": 2, "reward_type": "discount", "description": "Cupón 20% descuento en nivel 1 o 2"},
+    {"required": 3, "reward_type": "free_session", "description": "Sesión nivel 3 completamente gratis"},
+]
+
+def _generate_code() -> str:
+    import random, string
+    suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    return f"SKY-{suffix}"
+
+@api_router.post("/referral/generate")
+async def generate_referral_code(body: GenerateReferralRequest):
+    """Generate (or return existing) referral code for a user email."""
+    email = body.email.lower().strip()
+    existing = await db.referrals.find_one({"owner_email": email})
+    if existing:
+        return {
+            "code": existing["code"],
+            "owner_email": email,
+            "referral_count": len(existing.get("referred_emails", [])),
+            "rewards_unlocked": existing.get("rewards_unlocked", []),
+        }
+
+    # Generate unique code
+    for _ in range(10):
+        code = _generate_code()
+        clash = await db.referrals.find_one({"code": code})
+        if not clash:
+            break
+
+    doc = {
+        "code": code,
+        "owner_email": email,
+        "referred_emails": [],
+        "rewards_unlocked": [],
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    await db.referrals.insert_one(doc)
+    return {"code": code, "owner_email": email, "referral_count": 0, "rewards_unlocked": []}
+
+@api_router.get("/referral/{code}")
+async def validate_referral_code(code: str):
+    """Validate a referral code and return its stats."""
+    doc = await db.referrals.find_one({"code": code.upper()})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Código de referido no encontrado")
+    count = len(doc.get("referred_emails", []))
+    return {
+        "valid": True,
+        "code": doc["code"],
+        "owner_email": doc["owner_email"],
+        "referral_count": count,
+        "rewards_unlocked": doc.get("rewards_unlocked", []),
+    }
+
+@api_router.post("/referral/apply")
+async def apply_referral_code(body: ApplyReferralRequest):
+    """Register a purchase using a referral code. Call after confirmed payment."""
+    code = body.referral_code.upper()
+    buyer = body.buyer_email.lower().strip()
+
+    doc = await db.referrals.find_one({"code": code})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Código de referido no válido")
+
+    owner_email = doc["owner_email"]
+    if buyer == owner_email:
+        raise HTTPException(status_code=400, detail="No puedes usar tu propio código de referido")
+
+    referred = doc.get("referred_emails", [])
+    if buyer in referred:
+        return {"message": "Este email ya fue contabilizado", "referral_count": len(referred)}
+
+    referred.append(buyer)
+    new_count = len(referred)
+
+    # Check for new rewards
+    current_rewards = doc.get("rewards_unlocked", [])
+    new_rewards = list(current_rewards)
+    for r in REFERRAL_REWARDS:
+        already_unlocked = any(x["required"] == r["required"] for x in current_rewards)
+        if new_count >= r["required"] and not already_unlocked:
+            new_rewards.append({
+                "required": r["required"],
+                "reward_type": r["reward_type"],
+                "description": r["description"],
+                "unlocked_at": datetime.utcnow().isoformat(),
+            })
+
+    await db.referrals.update_one(
+        {"code": code},
+        {"$set": {"referred_emails": referred, "rewards_unlocked": new_rewards}},
+    )
+
+    return {
+        "message": "Referido registrado correctamente",
+        "referral_count": new_count,
+        "rewards_unlocked": new_rewards,
+        "new_reward_unlocked": len(new_rewards) > len(current_rewards),
+    }
+
+@api_router.get("/referral/rewards/{email}")
+async def get_referral_rewards(email: str):
+    """Return referral stats and rewards for a user."""
+    email = email.lower().strip()
+    doc = await db.referrals.find_one({"owner_email": email})
+    if not doc:
+        return {"has_code": False, "code": None, "referral_count": 0, "rewards_unlocked": [], "next_reward": REFERRAL_REWARDS[0]}
+
+    count = len(doc.get("referred_emails", []))
+    unlocked = doc.get("rewards_unlocked", [])
+    unlocked_required = {r["required"] for r in unlocked}
+    next_reward = next((r for r in REFERRAL_REWARDS if r["required"] not in unlocked_required), None)
+
+    return {
+        "has_code": True,
+        "code": doc["code"],
+        "referral_count": count,
+        "rewards_unlocked": unlocked,
+        "next_reward": next_reward,
+    }
+
+# ============== TESTIMONIALS SUBMIT ==============
+
+@api_router.post("/testimonials/submit")
+async def submit_testimonial(body: TestimonialSubmit):
+    """User-submitted testimonial — goes to pending moderation."""
+    # Dedup: one per order_id
+    existing = await db.testimonials.find_one({"order_id": body.order_id, "source": "user"})
+    if existing:
+        raise HTTPException(status_code=400, detail="Ya enviaste un testimonio para esta sesión")
+
+    # Validate order exists and is paid
+    order = await db.orders.find_one({"id": body.order_id})
+    if not order or order.get("payment_status") != "completed":
+        raise HTTPException(status_code=400, detail="Orden no válida o no pagada")
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": body.name,
+        "rating": min(5, max(1, body.rating)),
+        "location": body.country,
+        "level": body.level,
+        "level_name": body.level_name,
+        "text": body.text,
+        "date": datetime.utcnow().strftime("%Y-%m-%d"),
+        "verified": False,
+        "status": "pending",
+        "email": body.email,
+        "order_id": body.order_id,
+        "submitted_at": datetime.utcnow().isoformat(),
+        "moderated_at": None,
+        "source": "user",
+    }
+    await db.testimonials.insert_one(doc)
+    return {"success": True, "id": doc["id"], "message": "¡Gracias! Tu testimonio será revisado pronto."}
+
+
+# ============== REFERRAL REDEEM ==============
+
+@api_router.post("/referral/redeem")
+async def redeem_referral_reward(body: RedeemRewardRequest):
+    """Mark a referral reward as redeemed and return discount details."""
+    email = body.email.lower().strip()
+    doc = await db.referrals.find_one({"owner_email": email})
+    if not doc:
+        raise HTTPException(status_code=404, detail="No se encontró código de referido para este email")
+
+    rewards = doc.get("rewards_unlocked", [])
+    if body.reward_index >= len(rewards):
+        raise HTTPException(status_code=400, detail="Recompensa no encontrada")
+
+    reward = rewards[body.reward_index]
+    if reward.get("redeemed", False):
+        raise HTTPException(status_code=400, detail="Esta recompensa ya fue canjeada")
+
+    reward_type = reward.get("reward_type", "discount")
+    discount_percent = 100 if reward_type == "free_session" else 20
+
+    # Mark as redeemed
+    rewards[body.reward_index]["redeemed"] = True
+    rewards[body.reward_index]["redeemed_at"] = datetime.utcnow().isoformat()
+    rewards[body.reward_index]["redeemed_order_id"] = body.order_id
+
+    await db.referrals.update_one(
+        {"owner_email": email},
+        {"$set": {"rewards_unlocked": rewards}}
+    )
+
+    return {
+        "success": True,
+        "reward_type": reward_type,
+        "discount_percent": discount_percent,
+        "description": reward.get("description", ""),
+    }
+
+
+# ============== PUSH TOKENS ==============
+
+@api_router.post("/push-token")
+async def register_push_token(body: PushTokenRegister):
+    """Store or update an Expo push token for a user."""
+    if not body.token.startswith("ExponentPushToken["):
+        return {"success": False, "message": "Invalid token format"}
+
+    await db.push_tokens.update_one(
+        {"email": body.email.lower().strip()},
+        {"$set": {
+            "email": body.email.lower().strip(),
+            "token": body.token,
+            "platform": body.platform,
+            "updated_at": datetime.utcnow().isoformat(),
+        }, "$setOnInsert": {"created_at": datetime.utcnow().isoformat()}},
+        upsert=True,
+    )
+    return {"success": True}
+
+
+async def send_push_notification(token: str, title: str, body: str, data: dict = None) -> bool:
+    """Send a push notification via Expo Push API."""
+    try:
+        payload = {"to": token, "title": title, "body": body, "sound": "default"}
+        if data:
+            payload["data"] = data
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                "https://exp.host/--/api/v2/push/send",
+                json=payload,
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                timeout=10,
+            )
+        return r.status_code == 200
+    except Exception as e:
+        logging.warning(f"Push notification failed: {e}")
+        return False
+
+
+async def send_pending_reminders():
+    """Find appointments starting within 45-75 min and send reminder push."""
+    try:
+        tz = pytz.timezone("America/Mexico_City")
+        now = datetime.now(tz)
+        target_start = now + timedelta(minutes=45)
+        target_end = now + timedelta(minutes=75)
+        target_date = now.strftime("%Y-%m-%d")
+
+        appointments = await db.appointments.find({
+            "date": target_date,
+            "status": {"$ne": "cancelled"},
+            "reminder_sent": {"$ne": True},
+        }).to_list(50)
+
+        for apt in appointments:
+            apt_time_str = apt.get("time", "")
+            if not apt_time_str:
+                continue
+            try:
+                apt_hour, apt_min = map(int, apt_time_str.split(":"))
+                apt_dt = tz.localize(now.replace(hour=apt_hour, minute=apt_min, second=0))
+                if target_start <= apt_dt <= target_end:
+                    email = apt.get("patient_email", "")
+                    token_doc = await db.push_tokens.find_one({"email": email})
+                    if token_doc:
+                        await send_push_notification(
+                            token=token_doc["token"],
+                            title="Tu sesión de sanación está por comenzar",
+                            body=f"Recuerda: relájate, hidrátate y mantente receptivo. Tu sesión de Sky Water comienza en menos de 1 hora.",
+                            data={"type": "reminder"},
+                        )
+                    await db.appointments.update_one(
+                        {"_id": apt["_id"]},
+                        {"$set": {"reminder_sent": True}}
+                    )
+            except Exception:
+                continue
+    except Exception as e:
+        logging.warning(f"Reminder check failed: {e}")
+
+
+# ============== ADMIN ROUTES ==============
+
+def verify_admin(request: Request):
+    pin = request.headers.get("X-Admin-Pin", "")
+    if pin != ADMIN_PIN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+@api_router.post("/admin/auth")
+async def admin_auth(body: dict):
+    pin = body.get("pin", "")
+    if pin == ADMIN_PIN:
+        return {"valid": True}
+    raise HTTPException(status_code=401, detail="PIN incorrecto")
+
+@api_router.get("/admin/orders")
+async def admin_get_orders(request: Request, page: int = 1, limit: int = 20):
+    verify_admin(request)
+    skip = (page - 1) * limit
+    total = await db.orders.count_documents({})
+    orders = await db.orders.find({}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    for o in orders:
+        o.pop("_id", None)
+        if "created_at" in o and hasattr(o["created_at"], "isoformat"):
+            o["created_at"] = o["created_at"].isoformat()
+        if "paid_at" in o and o["paid_at"] and hasattr(o["paid_at"], "isoformat"):
+            o["paid_at"] = o["paid_at"].isoformat()
+    return {"orders": orders, "total": total, "page": page, "limit": limit}
+
+@api_router.get("/admin/appointments")
+async def admin_get_appointments(request: Request, days: int = 7):
+    verify_admin(request)
+    tz = pytz.timezone("America/Mexico_City")
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    end_date = (datetime.now(tz) + timedelta(days=days)).strftime("%Y-%m-%d")
+    apts = await db.appointments.find({
+        "date": {"$gte": today, "$lte": end_date},
+        "status": {"$ne": "cancelled"},
+    }).sort([("date", 1), ("time", 1)]).to_list(200)
+    for a in apts:
+        a.pop("_id", None)
+    return {"appointments": apts, "count": len(apts)}
+
+@api_router.get("/admin/referral-stats")
+async def admin_referral_stats(request: Request):
+    verify_admin(request)
+    total_codes = await db.referrals.count_documents({})
+    all_refs = await db.referrals.find({}).to_list(1000)
+    total_referrals = sum(len(r.get("referred_emails", [])) for r in all_refs)
+    top = sorted(all_refs, key=lambda r: len(r.get("referred_emails", [])), reverse=True)[:10]
+    top_referrers = [{"email": r["owner_email"], "code": r["code"], "count": len(r.get("referred_emails", []))} for r in top]
+    return {"total_codes": total_codes, "total_referrals": total_referrals, "top_referrers": top_referrers}
+
+@api_router.get("/admin/testimonials/pending")
+async def admin_pending_testimonials(request: Request):
+    verify_admin(request)
+    pending = await db.testimonials.find({"status": "pending"}).to_list(100)
+    for t in pending:
+        t.pop("_id", None)
+    return {"testimonials": pending, "count": len(pending)}
+
+@api_router.post("/admin/testimonials/{testimonial_id}/approve")
+async def admin_approve_testimonial(testimonial_id: str, request: Request):
+    verify_admin(request)
+    result = await db.testimonials.update_one(
+        {"id": testimonial_id},
+        {"$set": {"status": "approved", "verified": True, "moderated_at": datetime.utcnow().isoformat()}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Testimonio no encontrado")
+    return {"success": True}
+
+@api_router.post("/admin/testimonials/{testimonial_id}/reject")
+async def admin_reject_testimonial(testimonial_id: str, request: Request):
+    verify_admin(request)
+    result = await db.testimonials.update_one(
+        {"id": testimonial_id},
+        {"$set": {"status": "rejected", "moderated_at": datetime.utcnow().isoformat()}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Testimonio no encontrado")
+    return {"success": True}
+
+
+# ── Meta Conversions API helper ──────────────────────────────────────────────
+def _sha256(value: str) -> str:
+    return hashlib.sha256(value.strip().lower().encode()).hexdigest()
+
+async def fire_capi_event(
+    event_name: str,
+    request: Request,
+    fbclid: str | None = None,
+    fbp: str | None = None,
+    event_id: str | None = None,
+    custom_data: dict | None = None,
+):
+    """Send a server-side event to Meta Conversions API."""
+    token = META_CAPI_TOKEN or META_GRAPH_TOKEN
+    if not token:
+        return
+    event_id = event_id or str(uuid.uuid4())
+    client_ip = request.headers.get('x-forwarded-for', request.client.host if request.client else '').split(',')[0].strip()
+    user_agent = request.headers.get('user-agent', '')
+    source_url = str(request.url)
+
+    # Build fbc from fbclid if present
+    fbc = fbp  # reuse slot for fbc
+    if fbclid:
+        ts_ms = int(time.time() * 1000)
+        fbc = f"fb.1.{ts_ms}.{fbclid}"
+
+    user_data: dict = {}
+    if client_ip:
+        user_data['client_ip_address'] = _sha256(client_ip)
+    if user_agent:
+        user_data['client_user_agent'] = user_agent
+    if fbc:
+        user_data['fbc'] = fbc
+    if fbp:
+        user_data['fbp'] = fbp
+
+    payload = {
+        'data': json.dumps([{
+            'event_name': event_name,
+            'event_time': int(time.time()),
+            'event_id': event_id,
+            'event_source_url': source_url,
+            'action_source': 'website',
+            'user_data': user_data,
+            **(({'custom_data': custom_data}) if custom_data else {}),
+        }]),
+        'access_token': token,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            await c.post(
+                f'https://graph.facebook.com/v20.0/{META_PIXEL_ID}/events',
+                data=payload,
+            )
+    except Exception as e:
+        logging.getLogger(__name__).warning(f'CAPI error: {e}')
+
+
+# ── Landing page para anuncios Meta Ads ─────────────────────────────────────
+STORE_URLS = {
+    'ios': 'https://apps.apple.com/us/app/sky-water/id6760956520',
+    'android': 'https://play.google.com/store/apps/details?id=com.skywater.app',
+    'web': 'https://skywater.site',
+}
+
+@app.get("/download/redirect")
+async def download_redirect(request: Request, store: str = 'ios', fbclid: str | None = None, fbp: str | None = None):
+    """Track store click via CAPI then redirect to the actual store URL."""
+    event_id = str(uuid.uuid4())
+    await fire_capi_event(
+        event_name='ViewContent',
+        request=request,
+        fbclid=fbclid,
+        fbp=fbp,
+        event_id=event_id,
+        custom_data={'content_name': f'AppStoreClick_{store}', 'content_category': 'app_download'},
+    )
+    url = STORE_URLS.get(store, STORE_URLS['ios'])
+    return RedirectResponse(url=url, status_code=302)
+
+
+@app.get("/download", response_class=HTMLResponse)
+async def download_page(request: Request, fbclid: str | None = None, fbp: str | None = None):
+    # Fire CAPI Lead event server-side (non-blocking)
+    event_id = str(uuid.uuid4())
+    await fire_capi_event(
+        event_name='Lead',
+        request=request,
+        fbclid=fbclid,
+        fbp=fbp,
+        event_id=event_id,
+        custom_data={'content_name': 'Download Page', 'content_category': 'app_download'},
+    )
+
+    # Pass fbclid to redirect links for CAPI deduplication on store clicks
+    qs = f"?fbclid={fbclid}" if fbclid else ""
+    pixel_id = META_PIXEL_ID
+
+    return HTMLResponse(content=f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Sky Water — Descargar App</title>
+<!-- Meta Pixel client-side (dedup with CAPI via event_id) -->
+<script>
+!function(f,b,e,v,n,t,s){{if(f.fbq)return;n=f.fbq=function(){{n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)}};if(!f._fbq)f._fbq=n;
+n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}}(window,
+document,'script','https://connect.facebook.net/en_US/fbevents.js');
+fbq('init', '{pixel_id}');
+fbq('track', 'Lead', {{}}, {{eventID: '{event_id}'}});
+</script>
+<noscript><img height="1" width="1" style="display:none"
+src="https://www.facebook.com/tr?id={pixel_id}&ev=Lead&noscript=1"/></noscript>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(160deg, #0d1f3c 0%, #1a3a6e 60%, #0d1f3c 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+  }}
+  .card {{
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 24px;
+    padding: 40px 28px 36px;
+    max-width: 380px;
+    width: 100%;
+    text-align: center;
+    backdrop-filter: blur(12px);
+  }}
+  .logo {{
+    font-size: 13px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 6px;
+  }}
+  h1 {{
+    font-size: 34px;
+    font-weight: 700;
+    color: #ffffff;
+    margin-bottom: 8px;
+    letter-spacing: -0.5px;
+  }}
+  .tagline {{
+    font-size: 15px;
+    color: rgba(255,255,255,0.6);
+    margin-bottom: 36px;
+    line-height: 1.5;
+  }}
+  .btn {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    width: 100%;
+    padding: 17px 20px;
+    border-radius: 14px;
+    font-size: 16px;
+    font-weight: 600;
+    text-decoration: none;
+    margin-bottom: 12px;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+    color: #ffffff;
+  }}
+  .btn:active {{ transform: scale(0.97); opacity: 0.85; }}
+  .btn-ios {{
+    background: #000000;
+    border: 1px solid rgba(255,255,255,0.15);
+  }}
+  .btn-android {{
+    background: #1a73e8;
+  }}
+  .btn-web {{
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+  }}
+  .btn svg {{ flex-shrink: 0; }}
+  .divider {{
+    color: rgba(255,255,255,0.2);
+    font-size: 12px;
+    margin: 8px 0 20px;
+    letter-spacing: 1px;
+  }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Sky Water</div>
+  <h1>Descarga la app</h1>
+  <p class="tagline">Sanación energética a distancia.<br>Empieza hoy.</p>
+
+  <a class="btn btn-ios" href="/download/redirect?store=ios{qs}"
+     onclick="fbq('track','ViewContent',{{content_name:'AppStoreClick_ios'}})">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
+      <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+    </svg>
+    App Store — iPhone
+  </a>
+
+  <a class="btn btn-android" href="/download/redirect?store=android{qs}"
+     onclick="fbq('track','ViewContent',{{content_name:'AppStoreClick_android'}})">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
+      <path d="M3.18 23.76c.37.21.8.24 1.2.09l11.6-6.7-2.53-2.53L3.18 23.76zm16.3-10.34L17 11.97l-2.7 2.7 2.68 2.68 2.51-1.45c.71-.41.71-1.48-.01-1.88zM1.34.62C1.13.85 1 1.2 1 1.63v20.74c0 .43.13.78.35 1.01l.06.05 11.62-11.62v-.27L1.34.62zm14.48 8.35L4.22.21C3.82.06 3.39.1 3.03.3L13.6 10.88l2.22-1.91z"/>
+    </svg>
+    Google Play — Android
+  </a>
+
+  <div class="divider">— o también —</div>
+
+  <a class="btn btn-web" href="/download/redirect?store=web{qs}"
+     onclick="fbq('track','ViewContent',{{content_name:'WebClick'}})">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="rgba(255,255,255,0.8)">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+    </svg>
+    Ver sitio web
+  </a>
+</div>
+</body>
+</html>""", status_code=200)
+
+# ── ROAS Dashboard ─────────────────────────────────────────────────────────
+@app.get("/api/admin/roas")
+async def roas_dashboard(request: Request, days: int = 7, pin: str = ""):
+    """Admin endpoint: Meta Ads spend vs backend revenue → ROAS."""
+    if pin != ADMIN_PIN:
+        raise HTTPException(status_code=403, detail="Invalid PIN")
+
+    token = META_GRAPH_TOKEN
+    date_preset_map = {7: 'last_7d', 14: 'last_14d', 30: 'last_30d'}
+    date_preset = date_preset_map.get(days, 'last_7d')
+
+    ads_data = []
+    total_spend = 0.0
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(
+                f'https://graph.facebook.com/v20.0/{META_AD_ACCOUNT}/insights',
+                params={
+                    'fields': 'ad_id,ad_name,spend,impressions,clicks,ctr,cpc,actions',
+                    'level': 'ad',
+                    'date_preset': date_preset,
+                    'filtering': json.dumps([{'field': 'adset.campaign_id', 'operator': 'EQUAL', 'value': '120245337508400070'}]),
+                    'access_token': token,
+                }
+            )
+        for ad in r.json().get('data', []):
+            spend = float(ad.get('spend', 0))
+            total_spend += spend
+            actions = {a['action_type']: int(a['value']) for a in ad.get('actions', [])}
+            ads_data.append({
+                'name': ad.get('ad_name', ''),
+                'spend_mxn': round(spend, 2),
+                'impressions': int(ad.get('impressions', 0)),
+                'clicks': int(ad.get('clicks', 0)),
+                'ctr_pct': round(float(ad.get('ctr', 0)), 2),
+                'cpc_mxn': round(float(ad.get('cpc', 0)), 3),
+                'landing_page_views': actions.get('landing_page_view', 0),
+                'video_views': actions.get('video_view', 0),
+            })
+    except Exception as e:
+        logging.getLogger(__name__).error(f'ROAS Meta API error: {e}')
+
+    # Revenue from MongoDB
+    now = datetime.utcnow()
+    since = now - timedelta(days=days)
+    total_revenue = 0.0
+    order_count = 0
+    cost_per_lead = 0.0
+    try:
+        pipeline = [
+            {'$match': {'created_at': {'$gte': since}, 'payment_status': 'approved'}},
+            {'$group': {'_id': None, 'total': {'$sum': '$amount'}, 'count': {'$sum': 1}}}
+        ]
+        async for doc in db.orders.aggregate(pipeline):
+            total_revenue = float(doc.get('total', 0))
+            order_count = int(doc.get('count', 0))
+    except Exception as e:
+        logging.getLogger(__name__).error(f'ROAS MongoDB error: {e}')
+
+    # Lead count from CAPI events approximation (LP views as proxy)
+    total_lp = sum(a['landing_page_views'] for a in ads_data)
+    if total_lp > 0:
+        cost_per_lead = round(total_spend / total_lp, 2)
+
+    roas = round(total_revenue / total_spend, 2) if total_spend > 0 else 0
+
+    return {
+        'period_days': days,
+        'total_spend_mxn': round(total_spend, 2),
+        'total_revenue_mxn': round(total_revenue, 2),
+        'total_orders': order_count,
+        'roas': roas,
+        'total_landing_page_views': total_lp,
+        'cost_per_lead_mxn': cost_per_lead,
+        'ads': sorted(ads_data, key=lambda x: x['spend_mxn'], reverse=True),
+    }
+
+
 # Include the router (MUST be after all route definitions)
 app.include_router(api_router)
 
@@ -1460,18 +2995,48 @@ app.add_middleware(
     allow_credentials=True,
     allow_origins=[
         "http://localhost:3000",
+        "https://skywater.site",
+        "https://www.skywater.site",
         "http://localhost:8001",
-        "https://sacred-wavelength.preview.emergentagent.com",
         "https://skywater-five.vercel.app",
         "https://*.expo.dev",
     ],
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Admin-Pin"],
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+async def reminder_check_loop():
+    """Background loop: check every 15 min for appointments needing reminders."""
+    import asyncio
+    while True:
+        await asyncio.sleep(900)  # 15 minutes
+        await send_pending_reminders()
+
+
+@app.on_event("startup")
+async def startup_db_client():
+    """Create database indexes on startup to enforce slot uniqueness."""
+    import asyncio
+    try:
+        # Unique compound index prevents two active bookings at the same date+time
+        await db.appointments.create_index(
+            [("date", 1), ("time", 1)],
+            unique=True,
+            partialFilterExpression={"status": {"$ne": "cancelled"}},
+            name="unique_active_slot",
+        )
+        logger.info("MongoDB indexes created/verified successfully")
+    except Exception as e:
+        logger.warning(f"Index creation warning (may already exist): {e}")
+
+    # Start push notification reminder loop
+    asyncio.create_task(reminder_check_loop())
+
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+# trigger redeploy
