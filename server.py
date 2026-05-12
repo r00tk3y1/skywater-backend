@@ -2801,110 +2801,313 @@ src="https://www.facebook.com/tr?id={pixel_id}&ev=Lead&noscript=1"/></noscript>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: linear-gradient(160deg, #0d1f3c 0%, #1a3a6e 60%, #0d1f3c 100%);
+    background: #08111f;
     min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 24px 16px;
+    position: relative;
+    overflow: hidden;
+  }}
+  body::before {{
+    content: '';
+    position: fixed;
+    top: -20%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(ellipse, rgba(56,139,255,0.22) 0%, transparent 70%);
+    pointer-events: none;
+  }}
+  body::after {{
+    content: '';
+    position: fixed;
+    bottom: -10%;
+    left: 20%;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(ellipse, rgba(100,60,220,0.15) 0%, transparent 70%);
+    pointer-events: none;
   }}
   .card {{
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 24px;
-    padding: 40px 28px 36px;
-    max-width: 380px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 28px;
+    padding: 36px 28px 32px;
+    max-width: 390px;
     width: 100%;
     text-align: center;
-    backdrop-filter: blur(12px);
+    backdrop-filter: blur(20px);
+    position: relative;
+    z-index: 1;
+  }}
+  .badge {{
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: rgba(56,139,255,0.15);
+    border: 1px solid rgba(56,139,255,0.3);
+    border-radius: 20px;
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #6db3ff;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }}
+  .badge-dot {{
+    width: 7px;
+    height: 7px;
+    background: #3d9bff;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }}
+  @keyframes pulse {{
+    0%,100% {{ opacity: 1; transform: scale(1); }}
+    50% {{ opacity: 0.5; transform: scale(1.4); }}
   }}
   .logo {{
-    font-size: 13px;
+    font-size: 12px;
     letter-spacing: 4px;
     text-transform: uppercase;
-    color: rgba(255,255,255,0.5);
-    margin-bottom: 6px;
+    color: rgba(255,255,255,0.35);
+    margin-bottom: 10px;
   }}
   h1 {{
-    font-size: 34px;
-    font-weight: 700;
+    font-size: 32px;
+    font-weight: 800;
     color: #ffffff;
-    margin-bottom: 8px;
-    letter-spacing: -0.5px;
+    margin-bottom: 10px;
+    letter-spacing: -0.8px;
+    line-height: 1.15;
   }}
   .tagline {{
     font-size: 15px;
+    color: rgba(255,255,255,0.55);
+    margin-bottom: 24px;
+    line-height: 1.55;
+  }}
+  .social-proof {{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }}
+  .proof-item {{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 14px;
+  }}
+  .proof-item + .proof-item {{
+    border-left: 1px solid rgba(255,255,255,0.12);
+  }}
+  .proof-value {{
+    font-size: 15px;
+    font-weight: 700;
+    color: #ffffff;
+  }}
+  .proof-label {{
+    font-size: 11px;
+    color: rgba(255,255,255,0.4);
+    margin-top: 2px;
+  }}
+  .stars {{ color: #f5c842; font-size: 13px; letter-spacing: 1px; }}
+  .testimonial {{
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 16px 18px;
+    margin-bottom: 28px;
+    text-align: left;
+  }}
+  .testimonial-text {{
+    font-size: 13.5px;
+    color: rgba(255,255,255,0.72);
+    line-height: 1.55;
+    font-style: italic;
+    margin-bottom: 10px;
+  }}
+  .testimonial-author {{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }}
+  .avatar {{
+    width: 28px;
+    height: 28px;
+    background: linear-gradient(135deg,#3d9bff,#7c4dff);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: white;
+    flex-shrink: 0;
+  }}
+  .author-name {{
+    font-size: 12px;
+    font-weight: 600;
     color: rgba(255,255,255,0.6);
-    margin-bottom: 36px;
-    line-height: 1.5;
+  }}
+  .author-detail {{
+    font-size: 11px;
+    color: rgba(255,255,255,0.35);
   }}
   .btn {{
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 12px;
     width: 100%;
-    padding: 17px 20px;
-    border-radius: 14px;
-    font-size: 16px;
-    font-weight: 600;
+    padding: 16px 20px;
+    border-radius: 16px;
     text-decoration: none;
-    margin-bottom: 12px;
-    transition: transform 0.15s ease, opacity 0.15s ease;
+    margin-bottom: 10px;
+    transition: transform 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease;
     color: #ffffff;
+    position: relative;
+    overflow: hidden;
   }}
-  .btn:active {{ transform: scale(0.97); opacity: 0.85; }}
+  .btn:active {{ transform: scale(0.97); opacity: 0.88; }}
+  .btn-icon {{
+    flex-shrink: 0;
+    margin-right: 14px;
+  }}
+  .btn-text {{ flex: 1; text-align: left; }}
+  .btn-main {{
+    font-size: 15px;
+    font-weight: 700;
+    display: block;
+    line-height: 1.2;
+  }}
+  .btn-sub {{
+    font-size: 11px;
+    opacity: 0.6;
+    display: block;
+    margin-top: 2px;
+  }}
+  .btn-arrow {{
+    font-size: 18px;
+    opacity: 0.5;
+    margin-left: 8px;
+  }}
   .btn-ios {{
-    background: #000000;
+    background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
     border: 1px solid rgba(255,255,255,0.15);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
   }}
+  .btn-ios:hover {{ box-shadow: 0 6px 28px rgba(0,0,0,0.6); }}
   .btn-android {{
-    background: #1a73e8;
+    background: linear-gradient(135deg, #1557c0 0%, #1a73e8 100%);
+    border: 1px solid rgba(26,115,232,0.4);
+    box-shadow: 0 4px 20px rgba(26,115,232,0.25);
   }}
+  .btn-android:hover {{ box-shadow: 0 6px 28px rgba(26,115,232,0.4); }}
   .btn-web {{
-    background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.13);
   }}
-  .btn svg {{ flex-shrink: 0; }}
   .divider {{
-    color: rgba(255,255,255,0.2);
-    font-size: 12px;
-    margin: 8px 0 20px;
-    letter-spacing: 1px;
+    color: rgba(255,255,255,0.18);
+    font-size: 11px;
+    margin: 4px 0 14px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
   }}
+  .trust {{
+    margin-top: 20px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.28);
+    letter-spacing: 0.3px;
+  }}
+  .trust span {{ margin: 0 4px; }}
 </style>
 </head>
 <body>
 <div class="card">
+  <div class="badge"><span class="badge-dot"></span>Disponible ahora</div>
   <div class="logo">Sky Water</div>
-  <h1>Descarga la app</h1>
-  <p class="tagline">Sanación energética a distancia.<br>Empieza hoy.</p>
+  <h1>Sana desde<br>donde estás</h1>
+  <p class="tagline">Sanación energética a distancia.<br>Miles de personas ya lo comprueban.</p>
+
+  <div class="social-proof">
+    <div class="proof-item">
+      <div class="proof-value stars">★★★★★</div>
+      <div class="proof-label">4.9 rating</div>
+    </div>
+    <div class="proof-item">
+      <div class="proof-value">12,000+</div>
+      <div class="proof-label">descargas</div>
+    </div>
+    <div class="proof-item">
+      <div class="proof-value">7</div>
+      <div class="proof-label">niveles</div>
+    </div>
+  </div>
+
+  <div class="testimonial">
+    <div class="testimonial-text">"Llevaba 3 años con dolor de ciático. Después de la primera sesión de Sky Water dormí sin dolor por primera vez."</div>
+    <div class="testimonial-author">
+      <div class="avatar">R</div>
+      <div>
+        <div class="author-name">Rodrigo M.</div>
+        <div class="author-detail">Nervio ciático · Guadalajara</div>
+      </div>
+    </div>
+  </div>
 
   <a class="btn btn-ios" href="/download/redirect?store=ios{qs}"
      onclick="fbq('track','ViewContent',{{content_name:'AppStoreClick_ios'}})">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
-      <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
-    </svg>
-    App Store — iPhone
+    <span class="btn-icon">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+        <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+      </svg>
+    </span>
+    <span class="btn-text">
+      <span class="btn-main">Descargar en iPhone</span>
+      <span class="btn-sub">App Store · Gratis</span>
+    </span>
+    <span class="btn-arrow">›</span>
   </a>
 
   <a class="btn btn-android" href="/download/redirect?store=android{qs}"
      onclick="fbq('track','ViewContent',{{content_name:'AppStoreClick_android'}})">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
-      <path d="M3.18 23.76c.37.21.8.24 1.2.09l11.6-6.7-2.53-2.53L3.18 23.76zm16.3-10.34L17 11.97l-2.7 2.7 2.68 2.68 2.51-1.45c.71-.41.71-1.48-.01-1.88zM1.34.62C1.13.85 1 1.2 1 1.63v20.74c0 .43.13.78.35 1.01l.06.05 11.62-11.62v-.27L1.34.62zm14.48 8.35L4.22.21C3.82.06 3.39.1 3.03.3L13.6 10.88l2.22-1.91z"/>
-    </svg>
-    Google Play — Android
+    <span class="btn-icon">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+        <path d="M3.18 23.76c.37.21.8.24 1.2.09l11.6-6.7-2.53-2.53L3.18 23.76zm16.3-10.34L17 11.97l-2.7 2.7 2.68 2.68 2.51-1.45c.71-.41.71-1.48-.01-1.88zM1.34.62C1.13.85 1 1.2 1 1.63v20.74c0 .43.13.78.35 1.01l.06.05 11.62-11.62v-.27L1.34.62zm14.48 8.35L4.22.21C3.82.06 3.39.1 3.03.3L13.6 10.88l2.22-1.91z"/>
+      </svg>
+    </span>
+    <span class="btn-text">
+      <span class="btn-main">Descargar en Android</span>
+      <span class="btn-sub">Google Play · Gratis</span>
+    </span>
+    <span class="btn-arrow">›</span>
   </a>
 
   <div class="divider">— o también —</div>
 
   <a class="btn btn-web" href="/download/redirect?store=web{qs}"
      onclick="fbq('track','ViewContent',{{content_name:'WebClick'}})">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="rgba(255,255,255,0.8)">
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
-    </svg>
-    Ver sitio web
+    <span class="btn-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="rgba(255,255,255,0.7)">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+      </svg>
+    </span>
+    <span class="btn-text">
+      <span class="btn-main">Usar en el navegador</span>
+      <span class="btn-sub">skywater.site</span>
+    </span>
+    <span class="btn-arrow">›</span>
   </a>
+
+  <div class="trust">
+    <span>Pago seguro</span>·<span>Soporte 24/7</span>·<span>Sin riesgo</span>
+  </div>
 </div>
 </body>
 </html>""", status_code=200)
