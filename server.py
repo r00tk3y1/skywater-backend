@@ -20,6 +20,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import httpx
+import asyncio
 
 # Google Calendar integration (optional — graceful degradation if not installed)
 try:
@@ -2748,32 +2749,32 @@ STORE_URLS = {
 
 @app.get("/download/redirect")
 async def download_redirect(request: Request, store: str = 'ios', fbclid: str | None = None, fbp: str | None = None):
-    """Track store click via CAPI then redirect to the actual store URL."""
+    """Track store click via CAPI (background) then redirect instantly."""
     event_id = str(uuid.uuid4())
-    await fire_capi_event(
+    asyncio.create_task(fire_capi_event(
         event_name='ViewContent',
         request=request,
         fbclid=fbclid,
         fbp=fbp,
         event_id=event_id,
         custom_data={'content_name': f'AppStoreClick_{store}', 'content_category': 'app_download'},
-    )
+    ))
     url = STORE_URLS.get(store, STORE_URLS['ios'])
     return RedirectResponse(url=url, status_code=302)
 
 
 @app.get("/download", response_class=HTMLResponse)
 async def download_page(request: Request, fbclid: str | None = None, fbp: str | None = None):
-    # Fire CAPI Lead event server-side (non-blocking)
+    # Fire CAPI Lead event in background — do NOT block HTML render
     event_id = str(uuid.uuid4())
-    await fire_capi_event(
+    asyncio.create_task(fire_capi_event(
         event_name='Lead',
         request=request,
         fbclid=fbclid,
         fbp=fbp,
         event_id=event_id,
         custom_data={'content_name': 'Download Page', 'content_category': 'app_download'},
-    )
+    ))
 
     # Pass fbclid to redirect links for CAPI deduplication on store clicks
     qs = f"&fbclid={fbclid}" if fbclid else ""
@@ -2785,15 +2786,30 @@ async def download_page(request: Request, fbclid: str | None = None, fbp: str | 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Sky Water — Descargar App</title>
+<link rel="preconnect" href="https://connect.facebook.net" crossorigin>
+<link rel="dns-prefetch" href="https://connect.facebook.net">
 <!-- Meta Pixel client-side (dedup with CAPI via event_id) -->
+<script async src="https://connect.facebook.net/en_US/fbevents.js"></script>
 <script>
-!function(f,b,e,v,n,t,s){{if(f.fbq)return;n=f.fbq=function(){{n.callMethod?
-n.callMethod.apply(n,arguments):n.queue.push(arguments)}};if(!f._fbq)f._fbq=n;
-n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
-t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}}(window,
-document,'script','https://connect.facebook.net/en_US/fbevents.js');
-fbq('init', '{pixel_id}');
-fbq('track', 'Lead', {{}}, {{eventID: '{event_id}'}});
+window._fbq_event_id = '{event_id}';
+window._fbq_pixel   = '{pixel_id}';
+window.fbq = window.fbq || function(){{(window.fbq.q=window.fbq.q||[]).push(arguments)}};
+window.fbq.loaded = true; window.fbq.version = '2.0'; window.fbq.queue = [];
+document.addEventListener('DOMContentLoaded', function() {{
+  if (typeof fbq === 'function' && fbq.callMethod) {{
+    fbq('init', window._fbq_pixel);
+    fbq('track', 'Lead', {{}}, {{eventID: window._fbq_event_id}});
+  }} else {{
+    // fallback: pixel aún cargando, esperar
+    var t = setInterval(function() {{
+      if (typeof fbq === 'function' && fbq.callMethod) {{
+        clearInterval(t);
+        fbq('init', window._fbq_pixel);
+        fbq('track', 'Lead', {{}}, {{eventID: window._fbq_event_id}});
+      }}
+    }}, 100);
+  }}
+}});
 </script>
 <noscript><img height="1" width="1" style="display:none"
 src="https://www.facebook.com/tr?id={pixel_id}&ev=Lead&noscript=1"/></noscript>
