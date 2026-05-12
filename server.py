@@ -2776,7 +2776,7 @@ async def download_page(request: Request, fbclid: str | None = None, fbp: str | 
     )
 
     # Pass fbclid to redirect links for CAPI deduplication on store clicks
-    qs = f"?fbclid={fbclid}" if fbclid else ""
+    qs = f"&fbclid={fbclid}" if fbclid else ""
     pixel_id = META_PIXEL_ID
 
     return HTMLResponse(content=f"""<!DOCTYPE html>
