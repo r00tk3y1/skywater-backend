@@ -934,10 +934,15 @@ async def create_mercadopago_preference(data: MercadoPagoPreference):
                 }}
             )
             
+            # Auto-detect test vs production mode by token prefix
+            is_test_mode = MERCADO_PAGO_ACCESS_TOKEN.startswith('TEST-')
+            checkout_url = preference.get("sandbox_init_point", preference["init_point"]) if is_test_mode else preference["init_point"]
+
             return {
                 "preference_id": preference["id"],
-                "init_point": preference["init_point"],
+                "init_point": checkout_url,
                 "sandbox_init_point": preference.get("sandbox_init_point", preference["init_point"]),
+                "is_test_mode": is_test_mode,
                 "order_id": order_obj.id
             }
         else:
