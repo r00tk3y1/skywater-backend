@@ -3226,7 +3226,7 @@ app.add_middleware(
         "https://*.expo.dev",
     ],
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Admin-Pin"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Admin-Pin", "x-api-key", "Accept"],
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
