@@ -622,10 +622,10 @@ class PatientData(BaseModel):
     first_lastname: str
     second_lastname: str
     country: str
-    state: str
-    city: str
-    address: str
-    postal_code: str
+    state: Optional[str] = None
+    city: Optional[str] = None
+    address: Optional[str] = None
+    postal_code: Optional[str] = None
     birth_date: str
     symptoms: str
     email: str
