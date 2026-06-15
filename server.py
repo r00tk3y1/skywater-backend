@@ -60,6 +60,17 @@ mp_sdk = None
 if MERCADO_PAGO_ACCESS_TOKEN:
     mp_sdk = mercadopago.SDK(MERCADO_PAGO_ACCESS_TOKEN)
 
+# FX rate: USD → MXN (overridable via env var; one-time payment flow still
+# hardcodes 17.5 — replace that magic number with USD_TO_MXN in a later PR)
+USD_TO_MXN = float(os.environ.get('USD_TO_MXN', '17.5'))
+
+# Subscription tier config (prices in USD; billed in MXN via USD_TO_MXN)
+SUBSCRIPTION_TIERS = {
+    "rocio":    {"usd": 39.0,  "label": "Rocío"},
+    "manantial":{"usd": 97.0,  "label": "Manantial"},
+    "fuente":   {"usd": 197.0, "label": "Fuente"},
+}
+
 # Google Calendar configuration (stored OAuth2 refresh token — one-time setup)
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
@@ -659,6 +670,12 @@ class PaymentUpdate(BaseModel):
 class MercadoPagoPreference(BaseModel):
     order_id: str
 
+class SubscribeRequest(BaseModel):
+    email: str
+    tier: str
+    billing_cycle: Optional[str] = "monthly"  # "monthly" | "annual"
+    payer_name: Optional[str] = None
+
 class Testimonial(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
@@ -955,17 +972,20 @@ async def mercadopago_webhook(request: Request):
     try:
         payload = await request.json()
         
-        if payload.get("type") == "payment":
+        event_type = payload.get("type", "")
+
+        # ── One-time payment branch (unchanged) ──────────────────────────────
+        if event_type == "payment":
             payment_id = payload.get("data", {}).get("id")
-            
+
             if payment_id and mp_sdk:
                 payment_response = mp_sdk.payment().get(payment_id)
-                
+
                 if payment_response["status"] == 200:
                     payment = payment_response["response"]
                     external_reference = payment.get("external_reference")
                     payment_status = payment.get("status")
-                    
+
                     if external_reference:
                         status_map = {
                             "approved": "completed",
@@ -975,20 +995,74 @@ async def mercadopago_webhook(request: Request):
                             "cancelled": "cancelled",
                             "refunded": "refunded"
                         }
-                        
+
                         update_data = {
                             "mercadopago_payment_id": str(payment_id),
                             "payment_status": status_map.get(payment_status, "pending")
                         }
-                        
+
                         if payment_status == "approved":
                             update_data["paid_at"] = datetime.utcnow()
-                        
+
                         await db.orders.update_one(
                             {"id": external_reference},
                             {"$set": update_data}
                         )
-        
+
+        # ── Subscription / preapproval branch (new) ──────────────────────────
+        elif event_type in ("subscription_preapproval", "preapproval", "subscription_authorized_payment"):
+            resource_id = payload.get("data", {}).get("id")
+
+            if resource_id and mp_sdk:
+                # For authorized recurring payments, fetch the underlying preapproval
+                if event_type == "subscription_authorized_payment":
+                    # authorized_payment object contains preapproval_id
+                    auth_response = mp_sdk.authorized_payment().get(resource_id)
+                    if auth_response.get("status") == 200:
+                        auth_obj = auth_response["response"]
+                        preapproval_id = auth_obj.get("preapproval_id")
+                        payment_status_raw = auth_obj.get("status", "")
+                        # Record the individual recurring payment
+                        if preapproval_id:
+                            await db.subscription_payments.insert_one({
+                                "id": str(uuid.uuid4()),
+                                "preapproval_id": preapproval_id,
+                                "authorized_payment_id": str(resource_id),
+                                "status": payment_status_raw,
+                                "amount": auth_obj.get("transaction_amount"),
+                                "currency_id": auth_obj.get("currency_id", "MXN"),
+                                "recorded_at": datetime.utcnow(),
+                            })
+                            if payment_status_raw == "processed":
+                                await db.subscriptions.update_one(
+                                    {"preapproval_id": preapproval_id},
+                                    {"$set": {
+                                        "status": "authorized",
+                                        "last_payment_at": datetime.utcnow(),
+                                    }}
+                                )
+                else:
+                    # subscription_preapproval or preapproval: fetch the preapproval object
+                    pa_response = mp_sdk.preapproval().get(resource_id)
+                    if pa_response.get("status") == 200:
+                        pa = pa_response["response"]
+                        pa_status = pa.get("status", "")
+                        # Map MP statuses to internal statuses
+                        sub_status_map = {
+                            "authorized": "authorized",
+                            "pending": "pending",
+                            "paused": "paused",
+                            "cancelled": "cancelled",
+                        }
+                        mapped_status = sub_status_map.get(pa_status, pa_status)
+                        update_fields = {"status": mapped_status}
+                        if pa_status == "authorized":
+                            update_fields["authorized_at"] = datetime.utcnow()
+                        await db.subscriptions.update_one(
+                            {"preapproval_id": str(resource_id)},
+                            {"$set": update_fields}
+                        )
+
         return {"status": "received"}
     except Exception as e:
         return {"status": "received"}
@@ -1006,6 +1080,122 @@ async def get_payment_status(order_id: str):
         "mercadopago_payment_id": order.get("mercadopago_payment_id"),
         "paid_at": order.get("paid_at")
     }
+
+# ============== SUBSCRIPTION (RECURRING) ROUTES ==============
+
+@api_router.post("/mercadopago/subscribe")
+async def create_subscription(data: SubscribeRequest):
+    """Create a MercadoPago Preapproval (recurring subscription) for the given tier."""
+    if not mp_sdk:
+        raise HTTPException(status_code=500, detail="Mercado Pago not configured")
+
+    tier_key = data.tier.lower()
+    if tier_key not in SUBSCRIPTION_TIERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid tier '{data.tier}'. Valid options: {list(SUBSCRIPTION_TIERS.keys())}"
+        )
+
+    tier_cfg = SUBSCRIPTION_TIERS[tier_key]
+
+    # Amount is computed SERVER-SIDE from the tier + cycle. Never trust a client-sent amount.
+    cycle = (data.billing_cycle or "monthly").lower()
+    if cycle not in ("monthly", "annual"):
+        cycle = "monthly"
+    if cycle == "annual":
+        # "Paga 10, llévate 12": el cargo anual = 10 mensualidades, cobrado 1 vez al año.
+        usd_charge = tier_cfg["usd"] * 10
+        frequency, frequency_type = 12, "months"
+    else:
+        usd_charge = tier_cfg["usd"]
+        frequency, frequency_type = 1, "months"
+    amount_mxn = round(usd_charge * USD_TO_MXN, 2)
+
+    preapproval_data = {
+        "reason": f"Sky Water - Membresia {tier_cfg['label']} ({'Anual' if cycle == 'annual' else 'Mensual'})",
+        "payer_email": data.email,
+        "auto_recurring": {
+            "frequency": frequency,
+            "frequency_type": frequency_type,
+            "transaction_amount": amount_mxn,
+            "currency_id": "MXN",
+        },
+        "back_url": "https://skywater.site/checkout/confirmation",
+        "status": "pending",
+    }
+
+    try:
+        response = mp_sdk.preapproval().create(preapproval_data)
+
+        if response["status"] not in (200, 201):
+            raise HTTPException(status_code=400, detail="Error creating preapproval with MercadoPago")
+
+        preapproval = response["response"]
+        preapproval_id = preapproval.get("id")
+        init_point = preapproval.get("init_point")
+
+        # Persist to db.subscriptions
+        subscription_doc = {
+            "id": str(uuid.uuid4()),
+            "email": data.email,
+            "tier": tier_key,
+            "preapproval_id": preapproval_id,
+            "status": "pending",
+            "billing_cycle": cycle,
+            "created_at": datetime.utcnow(),
+            "amount_mxn": amount_mxn,
+        }
+        await db.subscriptions.insert_one(subscription_doc)
+
+        return {
+            "preapproval_id": preapproval_id,
+            "init_point": init_point,
+            "tier": tier_key,
+            "billing_cycle": cycle,
+            "amount_mxn": amount_mxn,
+            "email": data.email,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating subscription: {str(e)}")
+
+
+@api_router.get("/mercadopago/subscription-status/{email}")
+async def get_subscription_status(email: str):
+    """Return the active (or most recent) subscription for a given email."""
+    # Prefer authorized, then pending, then any other status
+    priority_order = ["authorized", "pending", "paused", "cancelled"]
+    subscription = None
+    for status in priority_order:
+        doc = await db.subscriptions.find_one(
+            {"email": email, "status": status},
+            sort=[("created_at", -1)]
+        )
+        if doc:
+            subscription = doc
+            break
+
+    if not subscription:
+        # Fall back to the most recent record regardless of status
+        subscription = await db.subscriptions.find_one(
+            {"email": email},
+            sort=[("created_at", -1)]
+        )
+
+    if not subscription:
+        raise HTTPException(status_code=404, detail="No subscription found for this email")
+
+    return {
+        "email": email,
+        "tier": subscription.get("tier"),
+        "status": subscription.get("status"),
+        "preapproval_id": subscription.get("preapproval_id"),
+        "amount_mxn": subscription.get("amount_mxn"),
+        "created_at": subscription.get("created_at"),
+        "last_payment_at": subscription.get("last_payment_at"),
+    }
+
 
 class ContributionRequest(BaseModel):
     amount: float
