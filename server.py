@@ -646,6 +646,8 @@ class OrderCreate(BaseModel):
     product_id: str
     patient_data: PatientData
     terms_accepted: bool
+    fbp: Optional[str] = None
+    fbclid: Optional[str] = None
 
 class Order(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -657,6 +659,8 @@ class Order(BaseModel):
     terms_accepted: bool
     payment_method: Optional[str] = None
     payment_status: str = "pending"
+    fbp: Optional[str] = None
+    fbclid: Optional[str] = None
     mercadopago_preference_id: Optional[str] = None
     mercadopago_payment_id: Optional[str] = None
     transaction_hash: Optional[str] = None
@@ -714,12 +718,12 @@ PRODUCTS = [
         id="level-1",
         level=1,
         name="Sky Water - Primer Contacto",
-        icon="stethoscope",
+        icon="compass",
         price=4.99,
-        indication="Análisis Energético Diagnóstico",
-        examples="Evaluación completa de tu campo energético, identificación de bloqueos, detección del origen de malestares",
-        description="Tu primer paso hacia la sanación. Realizamos un estudio profundo de tus condiciones de salud para identificar la raíz de tus problemas. Recibirás un diagnóstico energético personalizado que revelará cuál es la condición más urgente a tratar y el origen real del problema. Este análisis es fundamental para diseñar tu camino de sanación.",
-        badge="Primer Paso Esencial"
+        indication="Descubre tu nivel de energía",
+        examples="Conoce tu punto de partida en energía, claridad y enfoque",
+        description="Tu primer paso con Sky Water. Una lectura de tu nivel de energía para saber dónde estás hoy y por dónde empezar a sentirte con más vitalidad. Experiencia de bienestar.",
+        badge="Primer Paso"
     ),
     Product(
         id="level-2",
@@ -727,9 +731,9 @@ PRODUCTS = [
         name="Sky Water - Pulso Inicial",
         icon="zap",
         price=19.99,
-        indication="Prueba de Efectividad Energética",
-        examples="Dolor leve de cabeza, molestia muscular pasajera, incomodidad articular menor, tensión cervical leve, estrés acumulado",
-        description="¿Eres escéptico o es tu primera vez? Este nivel es perfecto para ti. Una micro-dosis de energía sanadora diseñada para que experimentes y compruebes por ti mismo el poder de Sky Water. Ideal para molestias menores del día a día. Sin compromiso, máximo resultado.",
+        indication="Tu primera experiencia de energía",
+        examples="Ideal para sentir por primera vez la energía Sky Water",
+        description="Perfecto si es tu primera vez o eres escéptico. Una micro-dosis de energía para que experimentes y sientas por ti mismo el efecto Sky Water. Sin compromiso, máxima experiencia.",
         badge="Para Nuevos y Escépticos"
     ),
     Product(
@@ -738,10 +742,10 @@ PRODUCTS = [
         name="Sky Water - Onda Suave",
         icon="radio",
         price=49.99,
-        indication="Sanación para Creyentes",
-        examples="Dolor leve persistente, malestar menor recurrente, tensión ligera acumulada, fatiga energética, bloqueos emocionales leves",
-        description="Ya probaste Sky Water y CREES en su poder. Este nivel desbloquea una carga energética significativamente mayor. La fe amplifica la conexión cuántica, permitiendo una sanación más profunda y duradera. Para quienes están listos para el siguiente paso en su transformación.",
-        badge="Carga Energética Potenciada"
+        indication="Energía y bienestar sostenido",
+        examples="Para mantener tu energía, claridad y ánimo día a día",
+        description="Ya sentiste el efecto y quieres más. Este nivel desbloquea una carga de energía mayor para sostener tu vitalidad y presencia. Para quienes están listos para el siguiente paso en su bienestar.",
+        badge="Energía Potenciada"
     ),
     Product(
         id="level-4",
@@ -749,10 +753,10 @@ PRODUCTS = [
         name="Sky Water - Corriente Activa",
         icon="activity",
         price=97,
-        indication="Curación de Dolencias Agudas",
-        examples="Dolor fuerte de muelas, malestar agudo de espalda, migraña intensa, dolor muscular severo, incomodidad articular aguda",
-        description="Una dosis concentrada de sanación para dolores intensos que necesitan atención inmediata. Sesión completa de 60 minutos donde canalizamos energía de alta frecuencia directamente a la zona afectada. Alivio rápido y efectivo para cuando el dolor no puede esperar.",
-        badge="Alivio Rápido"
+        indication="Recarga intensa de energía",
+        examples="Para días exigentes en los que necesitas energía y enfoque al máximo",
+        description="Una sesión completa de 60 minutos de energía de alta frecuencia para recargarte a fondo cuando más lo necesitas. Vitalidad y claridad para cuando el día no da tregua.",
+        badge="Recarga Rápida"
     ),
     Product(
         id="level-5",
@@ -760,9 +764,9 @@ PRODUCTS = [
         name="Sky Water - Inmersión Profunda",
         icon="layers",
         price=197,
-        indication="Padecimiento Crónico No Grave",
-        examples="Migrañas recurrentes, artritis leve, dolor de espalda crónico, tensión muscular constante, problemas digestivos persistentes",
-        description="Paquete de 3 sesiones diseñado para condiciones que llevan tiempo contigo. La sanación profunda requiere constancia. Con este programa, trabajamos en capas sucesivas para liberar bloqueos energéticos arraigados y restaurar el flujo natural de tu bioenergía.",
+        indication="Bienestar profundo y constante",
+        examples="Para quienes buscan constancia en su energía y equilibrio",
+        description="Paquete de 3 sesiones para un bienestar que dura. La vitalidad se construye con constancia: trabajamos en capas para liberar tu energía y restaurar tu equilibrio natural.",
         badge="Más Popular"
     ),
     Product(
@@ -771,10 +775,10 @@ PRODUCTS = [
         name="Sky Water - Resonancia Avanzada",
         icon="globe",
         price=397,
-        indication="Padecimiento Agudo Moderado",
-        examples="Virus respiratorios agresivos, infecciones recurrentes, recuperación post-operatoria, lesiones deportivas, fatiga crónica severa",
-        description="Programa de 6 sesiones para condiciones agudas que requieren intervención sostenida. Ideal para enfermedades que afectan tu rendimiento diario. Reforzamos tu sistema inmunológico energético y aceleramos los procesos naturales de recuperación de tu cuerpo.",
-        badge="Recuperación Acelerada"
+        indication="Energía sostenida y recuperación",
+        examples="Para sostener tu vitalidad y recuperarte del desgaste diario",
+        description="Programa de 6 sesiones para mantener tu energía en alto de forma sostenida. Ideal cuando el ritmo de vida te desgasta y quieres recuperar tu vitalidad y presencia.",
+        badge="Recuperación"
     ),
     Product(
         id="level-7",
@@ -782,21 +786,21 @@ PRODUCTS = [
         name="Sky Water - Onda Expandida",
         icon="sun",
         price=697,
-        indication="Padecimiento Moderado Crónico",
-        examples="Cefaleas constantes desde hace años, migrañas incapacitantes, fibromialgia, dolores crónicos de década, trastornos del sueño severos",
-        description="Programa trimestral de 12 sesiones para condiciones crónicas establecidas. Cuando el problema tiene raíces profundas, necesitamos tiempo para sanar completamente. Este programa incluye seguimiento personalizado y ajustes de tratamiento según tu evolución.",
-        badge="Sanación Profunda"
+        indication="Transformación de tu energía",
+        examples="Para un cambio profundo y sostenido en tu vitalidad y enfoque",
+        description="Programa trimestral de 12 sesiones con seguimiento personalizado. Para un cambio profundo y duradero en tu energía, claridad y bienestar general.",
+        badge="Bienestar Profundo"
     ),
     Product(
         id="level-8",
         level=8,
-        name="Sky Water - Sanación Máxima",
+        name="Sky Water - Plenitud Total",
         icon="maximize-2",
         price=997,
-        indication="Padecimiento Grave Crónico",
-        examples="Hernias discales, desplazamiento vertebral, dolor de espalda incapacitante, enfermedades autoinmunes, condiciones degenerativas",
-        description="Programa semestral de 24 sesiones para las condiciones más complejas y graves. Sanación intensiva para padecimientos que han resistido otros tratamientos. Trabajamos a nivel celular y energético para restaurar el equilibrio perdido y devolverte tu calidad de vida.",
-        badge="Tratamiento Intensivo"
+        indication="Bienestar integral intensivo",
+        examples="Para una transformación completa de tu energía y bienestar",
+        description="Programa semestral de 24 sesiones. Una experiencia intensiva de bienestar para renovar por completo tu energía, equilibrio y vitalidad, con acompañamiento personalizado.",
+        badge="Experiencia Intensiva"
     ),
     Product(
         id="level-9",
@@ -804,10 +808,21 @@ PRODUCTS = [
         name="Sky Water - Transformación Total",
         icon="infinity",
         price=1997,
-        indication="Sanación Integral Múltiple",
-        examples="Diabetes + hipertensión + dolor crónico, múltiples condiciones simultáneas, transformación total de salud, renovación energética completa",
-        description="Programa anual con sesiones ilimitadas. La experiencia definitiva de Sky Water. Para quienes enfrentan múltiples condiciones o buscan una transformación total de su salud. Acceso prioritario, atención personalizada 24/7, y un compromiso completo con tu bienestar. Tu inversión más importante: tu salud.",
+        indication="Bienestar ilimitado",
+        examples="La experiencia completa Sky Water para tu vitalidad total",
+        description="Programa anual con sesiones ilimitadas. La experiencia definitiva de Sky Water: energía, claridad y bienestar sin límites, con acceso prioritario y atención personalizada. Tu mayor inversión en ti.",
         badge="Transformación Total"
+    ),
+    Product(
+        id="tripwire",
+        level=0,
+        name="Sky Water - Sesión de Activación",
+        icon="zap",
+        price=9.97,
+        indication="Tu primera sesión de energía Sky Water",
+        examples="Energía, claridad y enfoque para tu día a día",
+        description="Tu primera sesión de Sky Water, sin mensualidad. Una experiencia de bienestar para sentir más energía, claridad y presencia. (Experiencia de bienestar, no es un tratamiento médico.)",
+        badge="Oferta de entrada"
     ),
 ]
 
@@ -849,7 +864,9 @@ async def create_order(order_data: OrderCreate):
         product_name=product.name,
         product_price=product.price,
         patient_data=order_data.patient_data,
-        terms_accepted=order_data.terms_accepted
+        terms_accepted=order_data.terms_accepted,
+        fbp=order_data.fbp,
+        fbclid=order_data.fbclid
     )
     
     await db.orders.insert_one(order.dict())
@@ -915,7 +932,7 @@ async def create_mercadopago_preference(data: MercadoPagoPreference):
             {
                 "id": order_obj.product_id,
                 "title": f"Sky Water - {order_obj.product_name}",
-                "description": f"Sanación Energética Nivel {order_obj.product_id.split('-')[1]}",
+                "description": "Sky Water - Experiencia de bienestar",
                 "quantity": 1,
                 "currency_id": "MXN",
                 "unit_price": order_obj.product_price * 17.5
@@ -1008,6 +1025,25 @@ async def mercadopago_webhook(request: Request):
                             {"id": external_reference},
                             {"$set": update_data}
                         )
+
+                        # Tripwire/ventas: notificar Purchase a Meta (CAPI) al aprobarse el pago.
+                        # event_id = order.id para deduplicar con el fbq('Purchase') del front.
+                        if payment_status == "approved":
+                            paid_order = await db.orders.find_one({"id": external_reference})
+                            if paid_order:
+                                asyncio.create_task(fire_capi_event(
+                                    event_name="Purchase",
+                                    request=request,
+                                    fbp=paid_order.get("fbp"),
+                                    fbclid=paid_order.get("fbclid"),
+                                    event_id=paid_order["id"],
+                                    custom_data={
+                                        "value": paid_order.get("product_price", 0),
+                                        "currency": "USD",
+                                        "content_type": "product",
+                                        "content_ids": [paid_order.get("product_id", "tripwire")],
+                                    },
+                                ))
 
         # ── Subscription / preapproval branch (new) ──────────────────────────
         elif event_type in ("subscription_preapproval", "preapproval", "subscription_authorized_payment"):
