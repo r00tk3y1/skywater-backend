@@ -655,8 +655,14 @@ class Order(BaseModel):
     product_id: str
     product_name: str
     product_price: float
+    product_level: Optional[int] = None
     patient_data: PatientData
     terms_accepted: bool
+    referral_code: Optional[str] = None
+    referral_applied: bool = False
+    coupon_code: Optional[str] = None
+    coupon_applied: bool = False
+    discount_pct: int = 0
     payment_method: Optional[str] = None
     payment_status: str = "pending"
     fbp: Optional[str] = None
@@ -673,6 +679,7 @@ class PaymentUpdate(BaseModel):
 
 class MercadoPagoPreference(BaseModel):
     order_id: str
+    referral_code: Optional[str] = None
 
 class SubscribeRequest(BaseModel):
     email: str
@@ -863,6 +870,7 @@ async def create_order(order_data: OrderCreate):
         product_id=product.id,
         product_name=product.name,
         product_price=product.price,
+        product_level=product.level,
         patient_data=order_data.patient_data,
         terms_accepted=order_data.terms_accepted,
         fbp=order_data.fbp,
@@ -924,9 +932,24 @@ async def create_mercadopago_preference(data: MercadoPagoPreference):
     order = await db.orders.find_one({"id": data.order_id})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
+
     order_obj = Order(**order)
-    
+
+    # Resolver descuento SERVER-SIDE (cupón canjeado o código de referido). Nunca confiar en el cliente.
+    disc = await resolve_discount_code(data.referral_code, order_obj.patient_data.email)
+    discount_pct = disc["discount_pct"]
+    if disc["kind"]:
+        await db.orders.update_one(
+            {"id": order_obj.id},
+            {"$set": {
+                "referral_code": disc["referral_code"],
+                "coupon_code": disc["coupon_code"],
+                "discount_pct": discount_pct,
+            }},
+        )
+
+    unit_price = round(order_obj.product_price * 17.5 * (1 - discount_pct / 100), 2)
+
     preference_data = {
         "items": [
             {
@@ -935,7 +958,7 @@ async def create_mercadopago_preference(data: MercadoPagoPreference):
                 "description": "Sky Water - Experiencia de bienestar",
                 "quantity": 1,
                 "currency_id": "MXN",
-                "unit_price": order_obj.product_price * 17.5
+                "unit_price": unit_price
             }
         ],
         "payer": {
@@ -1044,6 +1067,36 @@ async def mercadopago_webhook(request: Request):
                                         "content_ids": [paid_order.get("product_id", "tripwire")],
                                     },
                                 ))
+
+                                # Referido: registrar SERVER-SIDE sobre pago verificado (anti-farmeo).
+                                ref_code = paid_order.get("referral_code")
+                                if ref_code and not paid_order.get("referral_applied"):
+                                    buyer = (paid_order.get("patient_data") or {}).get("email", "")
+                                    try:
+                                        res = await register_referral_atomic(ref_code, buyer)
+                                        await db.orders.update_one(
+                                            {"id": external_reference},
+                                            {"$set": {"referral_applied": True}},
+                                        )
+                                        logger.info(f"Referral apply ({ref_code}) order {external_reference}: {res}")
+                                    except Exception as e:
+                                        logger.error(f"Referral register failed {external_reference}: {e}")
+
+                                # Cupón de recompensa: marcar usado de forma atómica sobre pago verificado.
+                                coupon_code = paid_order.get("coupon_code")
+                                if coupon_code and not paid_order.get("coupon_applied"):
+                                    try:
+                                        await db.coupons.update_one(
+                                            {"code": coupon_code, "used": False},
+                                            {"$set": {"used": True, "used_at": datetime.utcnow().isoformat(),
+                                                      "used_order_id": external_reference}},
+                                        )
+                                        await db.orders.update_one(
+                                            {"id": external_reference},
+                                            {"$set": {"coupon_applied": True}},
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"Coupon redeem failed {external_reference}: {e}")
 
         # ── Subscription / preapproval branch (new) ──────────────────────────
         elif event_type in ("subscription_preapproval", "preapproval", "subscription_authorized_payment"):
@@ -1805,10 +1858,14 @@ async def send_telegram_notification(apt_data: dict, product_name: str, order: d
 
     try:
         patient_data = order.get("patient_data", {}) if order else {}
+        def _g(k): return (patient_data.get(k) or "").strip()
+        full_name = " ".join(x for x in [_g("first_name"), _g("second_name"), _g("first_lastname"), _g("second_lastname")] if x) or apt_data.get("patient_name", "")
         symptoms = patient_data.get("symptoms", "No especificado")
         city = patient_data.get("city", "")
         country = patient_data.get("country", "")
-        location_str = f"{city}, {country}".strip(", ") or "No especificado"
+        location_str = ", ".join(x for x in [_g("city"), _g("state"), _g("country")] if x) or "No especificado"
+        address_str = ", ".join(x for x in [_g("address"), _g("postal_code")] if x) or "No especificado"
+        birth_date = _g("birth_date"); rfc = _g("rfc"); email_pd = _g("email")
 
         # Format date/time nicely
         import pytz
@@ -1822,19 +1879,22 @@ async def send_telegram_notification(apt_data: dict, product_name: str, order: d
         except Exception:
             date_fmt = f"{apt_data['date']} · {apt_data['time']} hrs"
 
-        # Truncate symptoms to keep message readable
-        symptoms_short = symptoms[:300] + "..." if len(symptoms) > 300 else symptoms
+        # Síntomas completos (cap a 3000 por límite de Telegram ~4096)
+        symptoms_short = symptoms[:3000] + "..." if len(symptoms) > 3000 else symptoms
 
         message = (
             f"🌊 *NUEVA CITA SKY WATER*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 *Paciente:* {apt_data['patient_name']}\n"
-            f"📧 *Email:* {apt_data['patient_email']}\n"
-            f"💊 *Servicio:* {product_name}\n"
+            f"👤 *Paciente:* {full_name}\n"
+            f"📧 *Email:* {apt_data['patient_email'] or email_pd}\n"
+            + (f"🎂 *Nacimiento:* {birth_date}\n" if birth_date else "")
+            + f"💊 *Servicio:* {product_name}\n"
             f"📅 *Fecha:* {date_fmt}\n"
             f"📍 *Ubicación:* {location_str}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🩺 *Síntomas:*\n{symptoms_short}\n"
+            f"🏠 *Dirección:* {address_str}\n"
+            + (f"🏛️ *RFC:* {rfc}\n" if rfc else "")
+            + f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🩺 *Síntomas / lo que reportó:*\n{symptoms_short}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🧾 Orden: `{apt_data['order_id']}`"
         )
@@ -2067,21 +2127,23 @@ async def create_google_calendar_event(apt_data: dict, product_name: str, order:
 
         # Build rich description with all patient info + symptoms
         patient_data = order.get("patient_data", {}) if order else {}
+        def _g(k): return (patient_data.get(k) or "").strip()
         symptoms = patient_data.get("symptoms", "No especificado")
-        birth_date = patient_data.get("birth_date", "")
-        country = patient_data.get("country", "")
-        state = patient_data.get("state", "")
-        city = patient_data.get("city", "")
-        rfc = patient_data.get("rfc", "")
+        birth_date = _g("birth_date")
+        country = _g("country"); state = _g("state"); city = _g("city")
+        address = _g("address"); postal_code = _g("postal_code")
+        rfc = _g("rfc")
+        full_name = " ".join(x for x in [_g("first_name"), _g("second_name"), _g("first_lastname"), _g("second_lastname")] if x) or apt_data.get("patient_name", "")
 
         description_lines = [
-            f"👤 Paciente: {apt_data['patient_name']}",
-            f"📧 Email: {apt_data['patient_email']}",
+            f"👤 Paciente: {full_name}",
+            f"📧 Email: {apt_data['patient_email'] or _g('email')}",
             f"🌊 Servicio: {product_name}",
             f"🧾 Orden: {apt_data['order_id']}",
             "",
             "📍 Ubicación del paciente:",
-            f"   {city}, {state}, {country}",
+            f"   {', '.join(x for x in [city, state, country] if x) or 'No especificado'}",
+            f"🏠 Dirección: {', '.join(x for x in [address, postal_code] if x) or 'No especificado'}",
         ]
         if birth_date:
             description_lines.append(f"🎂 Fecha de nacimiento: {birth_date}")
@@ -2089,7 +2151,7 @@ async def create_google_calendar_event(apt_data: dict, product_name: str, order:
             description_lines.append(f"🏛️ RFC: {rfc}")
         description_lines += [
             "",
-            "🩺 Síntomas / Condición reportada:",
+            "🩺 Síntomas / lo que reportó el paciente:",
             symptoms,
         ]
 
@@ -2547,7 +2609,8 @@ class GenerateReferralRequest(BaseModel):
 class ApplyReferralRequest(BaseModel):
     referral_code: str
     buyer_email: str
-    purchase_level: int  # 1, 2, or 3
+    order_id: str  # obligatorio: el referido SOLO se registra sobre una orden pagada y verificada
+    purchase_level: Optional[int] = None  # ignorado (legacy)
 
 # Reward thresholds
 REFERRAL_REWARDS = [
@@ -2559,6 +2622,98 @@ def _generate_code() -> str:
     import random, string
     suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
     return f"SKY-{suffix}"
+
+
+def _generate_coupon_code() -> str:
+    import random, string
+    suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    return f"SWC-{suffix}"
+
+
+# Descuento para el COMPRADOR que usa un código de referido válido (promesa del mensaje de compartir).
+REFERRAL_BUYER_DISCOUNT_PCT = 10
+
+
+async def register_referral_atomic(referral_code, buyer_email):
+    """Registra un referido de forma ATÓMICA y anti-fraude. Nunca lanza (uso seguro desde el webhook).
+
+    - $addToSet en una sola op: dedup por email + bloqueo de auto-referido sin race.
+    - Desbloqueo de recompensas idempotente (guard atómico evita duplicados bajo concurrencia).
+    Llamar SOLO sobre un pago verificado (webhook/confirmación de orden pagada).
+    """
+    if not referral_code:
+        return None
+    code = referral_code.upper().strip()
+    buyer = (buyer_email or "").lower().strip()
+    if not buyer:
+        return {"ok": False, "reason": "no_buyer"}
+
+    doc = await db.referrals.find_one({"code": code})
+    if not doc:
+        return {"ok": False, "reason": "code_not_found"}
+    if buyer == doc["owner_email"]:
+        return {"ok": False, "reason": "self_referral"}
+
+    # Paso A — añadir comprador atómicamente (dedup + anti auto-referido en una sola op)
+    add = await db.referrals.update_one(
+        {"code": code, "owner_email": {"$ne": buyer}, "referred_emails": {"$ne": buyer}},
+        {"$addToSet": {"referred_emails": buyer}},
+    )
+    if add.modified_count == 0:
+        fresh = await db.referrals.find_one({"code": code})
+        return {"ok": False, "reason": "already_counted", "referral_count": len(fresh.get("referred_emails", []))}
+
+    # Paso B — desbloquear recompensas pendientes (idempotente, guard atómico)
+    fresh = await db.referrals.find_one({"code": code})
+    new_count = len(fresh.get("referred_emails", []))
+    unlocked_now = []
+    for r in REFERRAL_REWARDS:
+        if new_count >= r["required"]:
+            reward_doc = {
+                "required": r["required"],
+                "reward_type": r["reward_type"],
+                "description": r["description"],
+                "unlocked_at": datetime.utcnow().isoformat(),
+                "redeemed": False,
+            }
+            res = await db.referrals.update_one(
+                {"code": code, "rewards_unlocked.required": {"$ne": r["required"]}},
+                {"$push": {"rewards_unlocked": reward_doc}},
+            )
+            if res.modified_count:
+                unlocked_now.append(reward_doc)
+
+    final = await db.referrals.find_one({"code": code})
+    return {"ok": True, "referral_count": new_count,
+            "rewards_unlocked": final.get("rewards_unlocked", []), "new_rewards": unlocked_now}
+
+
+async def resolve_discount_code(raw_code, buyer_email):
+    """Resuelve un código ingresado en el checkout: cupón canjeado o código de referido.
+
+    Devuelve {kind, discount_pct, coupon_code, referral_code} (discount_pct=0 si no aplica).
+    - Cupón de recompensa (db.coupons, no usado) → su discount_pct (ej. 20%).
+    - Código de referido válido (no auto-referido) → REFERRAL_BUYER_DISCOUNT_PCT (10%).
+    El descuento se calcula SIEMPRE en el servidor; nunca se confía en el cliente.
+    """
+    out = {"kind": None, "discount_pct": 0, "coupon_code": None, "referral_code": None}
+    if not raw_code:
+        return out
+    code = raw_code.upper().strip()
+    buyer = (buyer_email or "").lower().strip()
+
+    coupon = await db.coupons.find_one({"code": code, "used": False})
+    if coupon:
+        pct = int(coupon.get("discount_pct", 0) or 0)
+        # Cupones 100% (sesión gratis) NO pasan por MercadoPago ($0 inválido) -> se canjean aparte.
+        if 0 < pct < 100:
+            out.update(kind="coupon", discount_pct=pct, coupon_code=code)
+        return out
+
+    ref = await db.referrals.find_one({"code": code})
+    if ref and ref.get("owner_email") != buyer:
+        out.update(kind="referral", discount_pct=REFERRAL_BUYER_DISCOUNT_PCT, referral_code=code)
+    return out
 
 @api_router.post("/referral/generate")
 async def generate_referral_code(body: GenerateReferralRequest):
@@ -2597,58 +2752,50 @@ async def validate_referral_code(code: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Código de referido no encontrado")
     count = len(doc.get("referred_emails", []))
+    # NO exponer owner_email: endpoint público sin auth (evita fuga de PII).
     return {
         "valid": True,
         "code": doc["code"],
-        "owner_email": doc["owner_email"],
         "referral_count": count,
-        "rewards_unlocked": doc.get("rewards_unlocked", []),
     }
 
 @api_router.post("/referral/apply")
 async def apply_referral_code(body: ApplyReferralRequest):
-    """Register a purchase using a referral code. Call after confirmed payment."""
-    code = body.referral_code.upper()
+    """Registrar un referido SOBRE UNA ORDEN PAGADA Y VERIFICADA (anti-farmeo).
+
+    Verifica que la orden exista, esté pagada y pertenezca al comprador antes de contar.
+    Para MercadoPago el registro ya ocurre en el webhook; esta ruta cubre USDT/compat.
+    Idempotente: marca la orden para no recontar.
+    """
+    code = body.referral_code.upper().strip()
     buyer = body.buyer_email.lower().strip()
 
-    doc = await db.referrals.find_one({"code": code})
-    if not doc:
+    order = await db.orders.find_one({"id": body.order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden no encontrada")
+    if order.get("payment_status") not in ("completed", "approved"):
+        raise HTTPException(status_code=400, detail="La orden no está pagada")
+    order_email = (order.get("patient_data") or {}).get("email", "").lower().strip()
+    if order_email != buyer:
+        raise HTTPException(status_code=400, detail="El comprador no coincide con la orden")
+    if order.get("referral_applied"):
+        return {"message": "Este referido ya fue contabilizado"}
+
+    res = await register_referral_atomic(code, buyer)
+    await db.orders.update_one({"id": body.order_id}, {"$set": {"referral_applied": True, "referral_code": code}})
+
+    if not res or res.get("reason") == "code_not_found":
         raise HTTPException(status_code=404, detail="Código de referido no válido")
-
-    owner_email = doc["owner_email"]
-    if buyer == owner_email:
+    if res.get("reason") == "self_referral":
         raise HTTPException(status_code=400, detail="No puedes usar tu propio código de referido")
-
-    referred = doc.get("referred_emails", [])
-    if buyer in referred:
-        return {"message": "Este email ya fue contabilizado", "referral_count": len(referred)}
-
-    referred.append(buyer)
-    new_count = len(referred)
-
-    # Check for new rewards
-    current_rewards = doc.get("rewards_unlocked", [])
-    new_rewards = list(current_rewards)
-    for r in REFERRAL_REWARDS:
-        already_unlocked = any(x["required"] == r["required"] for x in current_rewards)
-        if new_count >= r["required"] and not already_unlocked:
-            new_rewards.append({
-                "required": r["required"],
-                "reward_type": r["reward_type"],
-                "description": r["description"],
-                "unlocked_at": datetime.utcnow().isoformat(),
-            })
-
-    await db.referrals.update_one(
-        {"code": code},
-        {"$set": {"referred_emails": referred, "rewards_unlocked": new_rewards}},
-    )
+    if res.get("reason") == "already_counted":
+        return {"message": "Este email ya fue contabilizado", "referral_count": res.get("referral_count", 0)}
 
     return {
         "message": "Referido registrado correctamente",
-        "referral_count": new_count,
-        "rewards_unlocked": new_rewards,
-        "new_reward_unlocked": len(new_rewards) > len(current_rewards),
+        "referral_count": res["referral_count"],
+        "rewards_unlocked": res["rewards_unlocked"],
+        "new_reward_unlocked": len(res["new_rewards"]) > 0,
     }
 
 @api_router.get("/referral/rewards/{email}")
@@ -2712,14 +2859,19 @@ async def submit_testimonial(body: TestimonialSubmit):
 
 @api_router.post("/referral/redeem")
 async def redeem_referral_reward(body: RedeemRewardRequest):
-    """Mark a referral reward as redeemed and return discount details."""
+    """Canjear una recompensa: genera un CUPÓN real (db.coupons) que el checkout honra.
+
+    Atómico: marca la recompensa canjeada en una sola op (evita doble canje bajo concurrencia).
+    Cupón 20% (descuento) → aplicable directo en el checkout.
+    Cupón 100% (sesión gratis) → se entrega el código pero se canjea con soporte ($0 no pasa por MercadoPago).
+    """
     email = body.email.lower().strip()
     doc = await db.referrals.find_one({"owner_email": email})
     if not doc:
         raise HTTPException(status_code=404, detail="No se encontró código de referido para este email")
 
     rewards = doc.get("rewards_unlocked", [])
-    if body.reward_index >= len(rewards):
+    if body.reward_index < 0 or body.reward_index >= len(rewards):
         raise HTTPException(status_code=400, detail="Recompensa no encontrada")
 
     reward = rewards[body.reward_index]
@@ -2727,22 +2879,45 @@ async def redeem_referral_reward(body: RedeemRewardRequest):
         raise HTTPException(status_code=400, detail="Esta recompensa ya fue canjeada")
 
     reward_type = reward.get("reward_type", "discount")
+    required = reward.get("required")
     discount_percent = 100 if reward_type == "free_session" else 20
 
-    # Mark as redeemed
-    rewards[body.reward_index]["redeemed"] = True
-    rewards[body.reward_index]["redeemed_at"] = datetime.utcnow().isoformat()
-    rewards[body.reward_index]["redeemed_order_id"] = body.order_id
+    # Cupón único
+    for _ in range(10):
+        coupon_code = _generate_coupon_code()
+        if not await db.coupons.find_one({"code": coupon_code}):
+            break
 
-    await db.referrals.update_one(
-        {"owner_email": email},
-        {"$set": {"rewards_unlocked": rewards}}
+    # Marcar canjeada de forma ATÓMICA (guard: aún no canjeada)
+    upd = await db.referrals.update_one(
+        {"owner_email": email,
+         "rewards_unlocked": {"$elemMatch": {"required": required, "redeemed": {"$ne": True}}}},
+        {"$set": {
+            "rewards_unlocked.$[r].redeemed": True,
+            "rewards_unlocked.$[r].redeemed_at": datetime.utcnow().isoformat(),
+            "rewards_unlocked.$[r].coupon_code": coupon_code,
+        }},
+        array_filters=[{"r.required": required}],
     )
+    if upd.modified_count == 0:
+        raise HTTPException(status_code=400, detail="Esta recompensa ya fue canjeada")
+
+    await db.coupons.insert_one({
+        "code": coupon_code,
+        "owner_email": email,
+        "discount_pct": discount_percent,
+        "reward_type": reward_type,
+        "reward_required": required,
+        "used": False,
+        "created_at": datetime.utcnow().isoformat(),
+    })
 
     return {
         "success": True,
+        "coupon_code": coupon_code,
         "reward_type": reward_type,
         "discount_percent": discount_percent,
+        "free_session": reward_type == "free_session",
         "description": reward.get("description", ""),
     }
 
